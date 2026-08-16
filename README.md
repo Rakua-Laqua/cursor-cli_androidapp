@@ -20,7 +20,7 @@ Android から PC 上の Cursor CLI / ACP セッションを操作するため�
 ## TypeScript modules
 
 ```bash
-npm ci
+npm install
 npm run build
 npm test
 npm run lint
