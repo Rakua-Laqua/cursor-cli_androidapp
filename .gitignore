@@ -1,0 +1,28 @@
+# Node / TypeScript
+node_modules/
+dist/
+*.tsbuildinfo
+
+# Android / Gradle
+.gradle/
+**/build/
+local.properties
+*.apk
+*.aab
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets / local runtime data
+.env
+.env.*
+!.env.example
+*.keystore
+*.jks
+runtime-data/
