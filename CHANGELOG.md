@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## [0.1.1] - 2026-08-17
+
+### 追加
+
+- インストール済み Cursor CLI / ACP の実測 Capability を `docs/acp_capability_report.md` に記録した。`initialize` / `authenticate`、`session/new`、`session/prompt` は成功し、`session/update`、`session/request_permission`、`session/cancel`（notification）、Session Config Options を観測した。`usage_update` と `cursor/*` 拡張は未観測であり、Local Daemon の ACP 接続はまだ有効ではない。
+
+### ドキュメント
+
+- README の Phase 境界を、Capability 未記録から `docs/acp_capability_report.md` 記録済みへ更新した。未観測機能を前提にしない拘束は TASK-101 以降でも維持する。
+
 ## [0.1.0] - 2026-08-17
 
 ### 追加

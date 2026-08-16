@@ -40,4 +40,4 @@ Phase 0 の Android アプリは起動確認用の最小 Compose 画面だけを
 
 ## Phase boundary
 
-Phase 0 完了後、Phase 1 は `TASK-100: Cursor ACP Capability Probe` から開始します。実機の Cursor CLI / ACP Capability を測定して `docs/acp_capability_report.md` に記録するまで、ACP API の存在を仮定した実装には進みません。
+Phase 0 完了後、Phase 1 は `TASK-100: Cursor ACP Capability Probe` から開始します。実機の Cursor CLI / ACP Capability は `docs/acp_capability_report.md` に記録済みです。未観測の機能を存在する前提で実装しないという拘束は、TASK-101 以降でも維持します。
