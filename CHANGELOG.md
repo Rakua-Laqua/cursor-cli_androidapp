@@ -1,5 +1,22 @@
 # CHANGELOG
 
+## [0.2.0] - 2026-08-17
+
+### 追加
+
+- Local Daemon が Cursor ACP を子プロセスとして起動し、stdin/stdout の JSON-RPC 2.0（newline-delimited）で request / notification を送受信できるようにした。`Daemon.start` はプロセス起動と輸送までを行い、`initialize` / `authenticate` / Session 作成 / Prompt / Event 変換はまだ自動では行わない（TASK-102）。
+- 明示の `command` が無い場合、Windows では `%LOCALAPPDATA%\cursor-agent\versions` の最新版ディレクトリにある `node.exe`（または `node`）と `index.js` を `acp` 引数付きで起動する。見つからない場合は PATH 上の `agent` / `agent.cmd` / `agent.exe` を探す。どちらも無い場合は `AcpCommandNotFoundError` になる。
+- ACP からの `session/update` などの notification を購読でき、`session/request_permission` などの incoming request に `onIncomingRequest` で応答できる。ハンドラが無い場合は JSON-RPC の Method not found（`-32601`）を返してエージェントを待たせない。不正な stdout 行は無視し、stderr は logger へ転送する。
+- ACP が予期せず終了しても Daemon 自体は落ちず、未完了の request は `AcpProcessExitedError` で失敗する。`Daemon.stop` は stdin を閉じたあと子プロセスを終了し、残さない。request の既定タイムアウトは 30 秒、shutdown の既定待ちは 3 秒。
+
+### ドキュメント
+
+- `daemon/README.md` の Phase 境界を、TASK-101（ACP 子プロセスと JSON-RPC / プロセス寿命）まで実装済み、Session 作成・Prompt・Event 変換は TASK-102 と明記する内容へ更新した。
+
+### テスト
+
+- mock ACP を使って JSON-RPC の id 対応、notification、incoming request、異常終了、timeout、shutdown 後に子プロセスが残らないこと、および Cursor agent の version ディレクトリ解決を検証するテストを daemon に追加した。ルートの `npm test` は protocol に加えて daemon も実行する。
+
 ## [0.1.1] - 2026-08-17
 
 ### 追加
