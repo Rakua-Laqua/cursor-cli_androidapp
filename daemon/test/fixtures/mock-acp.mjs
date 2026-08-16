@@ -4,7 +4,105 @@ function send(message) {
   process.stdout.write(`${JSON.stringify(message)}\n`);
 }
 
+function sendUpdate(sessionId, update) {
+  send({
+    jsonrpc: '2.0',
+    method: 'session/update',
+    params: { sessionId, update },
+  });
+}
+
+function sessionMeta() {
+  return {
+    modes: {
+      currentModeId: 'agent',
+      availableModes: [{ id: 'agent', name: 'Agent' }],
+    },
+    models: {
+      currentModelId: 'mock-model',
+      availableModels: [{ id: 'mock-model', name: 'Mock' }],
+    },
+    configOptions: [],
+  };
+}
+
+function readPromptText(params) {
+  const prompt = params?.prompt;
+  if (!Array.isArray(prompt) || prompt.length === 0) {
+    return '';
+  }
+  const first = prompt[0];
+  return first && typeof first.text === 'string' ? first.text : '';
+}
+
+function waitForCancel(sessionId, timeoutMs) {
+  if (pendingCancels.has(sessionId)) {
+    pendingCancels.delete(sessionId);
+    return Promise.resolve(true);
+  }
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      delayWaiters.delete(sessionId);
+      resolve(false);
+    }, timeoutMs);
+    delayWaiters.set(sessionId, () => {
+      clearTimeout(timer);
+      delayWaiters.delete(sessionId);
+      pendingCancels.delete(sessionId);
+      resolve(true);
+    });
+  });
+}
+
+async function handlePrompt(id, params) {
+  const sessionId = params?.sessionId;
+  if (typeof sessionId !== 'string' || !sessions.has(sessionId)) {
+    send({
+      jsonrpc: '2.0',
+      id,
+      error: { code: -32602, message: 'Unknown session' },
+    });
+    return;
+  }
+
+  const text = readPromptText(params);
+  sendUpdate(sessionId, {
+    sessionUpdate: 'user_message_chunk',
+    content: { type: 'text', text },
+  });
+  sendUpdate(sessionId, {
+    sessionUpdate: 'agent_thought_chunk',
+    content: { type: 'text', text: 'thinking' },
+  });
+
+  if (text === 'DELAY') {
+    const cancelled = await waitForCancel(sessionId, 8000);
+    send({
+      jsonrpc: '2.0',
+      id,
+      result: { stopReason: cancelled ? 'cancelled' : 'end_turn' },
+    });
+    return;
+  }
+
+  const reply = `echo:${text}`;
+  const splitAt = Math.max(1, Math.ceil(reply.length / 2));
+  sendUpdate(sessionId, {
+    sessionUpdate: 'agent_message_chunk',
+    content: { type: 'text', text: reply.slice(0, splitAt) },
+  });
+  sendUpdate(sessionId, {
+    sessionUpdate: 'agent_message_chunk',
+    content: { type: 'text', text: reply.slice(splitAt) },
+  });
+  send({ jsonrpc: '2.0', id, result: { stopReason: 'end_turn' } });
+}
+
 const pendingPeer = new Map();
+const sessions = new Set();
+const pendingCancels = new Set();
+const delayWaiters = new Map();
+let sessionSeq = 0;
 const ignoreStdin = process.env.MOCK_ACP_IGNORE_STDIN === '1';
 const ignoreSigterm = process.env.MOCK_ACP_IGNORE_SIGTERM === '1';
 
@@ -60,6 +158,65 @@ rl.on('line', (line) => {
         },
       },
     });
+    return;
+  }
+
+  if (method === 'authenticate') {
+    send({ jsonrpc: '2.0', id, result: {} });
+    return;
+  }
+
+  if (method === 'session/new') {
+    sessionSeq += 1;
+    const sessionId = `sess-${sessionSeq}`;
+    sessions.add(sessionId);
+    send({
+      jsonrpc: '2.0',
+      id,
+      result: {
+        sessionId,
+        ...sessionMeta(),
+      },
+    });
+    return;
+  }
+
+  if (method === 'session/load') {
+    const sessionId = params?.sessionId;
+    if (typeof sessionId !== 'string' || !sessions.has(sessionId)) {
+      send({
+        jsonrpc: '2.0',
+        id,
+        error: { code: -32602, message: 'Unknown session' },
+      });
+      return;
+    }
+    send({ jsonrpc: '2.0', id, result: sessionMeta() });
+    return;
+  }
+
+  if (method === 'session/prompt') {
+    void handlePrompt(id, params);
+    return;
+  }
+
+  if (method === 'session/cancel') {
+    if (typeof id !== 'undefined') {
+      send({
+        jsonrpc: '2.0',
+        id,
+        error: { code: -32601, message: 'Method not found: session/cancel' },
+      });
+      return;
+    }
+    const sessionId = params?.sessionId;
+    if (typeof sessionId === 'string') {
+      pendingCancels.add(sessionId);
+      const resume = delayWaiters.get(sessionId);
+      if (resume) {
+        resume();
+      }
+    }
     return;
   }
 

@@ -1,5 +1,6 @@
 import { AcpProcess, type AcpProcessLogger, type AcpProcessOptions } from './acp/process.js';
 import { resolveAcpCommand } from './acp/resolve-command.js';
+import { AcpSessionAdapter } from './session/session-adapter.js';
 
 export interface DaemonAcpOptions {
   readonly command?: string;
@@ -17,7 +18,10 @@ export interface DaemonStartOptions {
 }
 
 export class Daemon {
-  private constructor(private readonly acpProcess: AcpProcess) {}
+  private constructor(
+    private readonly acpProcess: AcpProcess,
+    private readonly sessionAdapter: AcpSessionAdapter,
+  ) {}
 
   static async start(options: DaemonStartOptions = {}): Promise<Daemon> {
     const resolved = options.acp?.command
@@ -41,11 +45,15 @@ export class Daemon {
         : {}),
     });
 
-    return new Daemon(acpProcess);
+    return new Daemon(acpProcess, new AcpSessionAdapter(acpProcess));
   }
 
   get acp(): AcpProcess {
     return this.acpProcess;
+  }
+
+  get sessions(): AcpSessionAdapter {
+    return this.sessionAdapter;
   }
 
   async stop(): Promise<void> {

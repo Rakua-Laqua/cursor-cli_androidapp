@@ -1,0 +1,214 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+
+import { parseRemoteCommand, serializeCommand } from '@cursor-remote/protocol';
+
+import { Daemon } from '../dist/index.js';
+
+const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'mock-acp.mjs');
+
+function mockLaunch() {
+  return {
+    command: process.execPath,
+    args: [fixture],
+  };
+}
+
+async function withDaemon(fn) {
+  const daemon = await Daemon.start({
+    acp: {
+      ...mockLaunch(),
+      shutdownTimeoutMs: 1000,
+    },
+  });
+  try {
+    await fn(daemon);
+  } finally {
+    await daemon.stop();
+  }
+}
+
+function makeWorkspace() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'acp-ws-'));
+}
+
+function collectEvents(daemon) {
+  const events = [];
+  daemon.sessions.onEvent((event) => events.push(event));
+  return events;
+}
+
+async function waitUntil(predicate, timeoutMs = 2000) {
+  const started = Date.now();
+  while (!predicate()) {
+    if (Date.now() - started > timeoutMs) {
+      throw new Error('timed out waiting for condition');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+function joinedAssistantText(events) {
+  return events
+    .filter((event) => event.type === 'assistant.message')
+    .map((event) => event.payload.text)
+    .join('');
+}
+
+test('session.create rejects a workspace path that is not a directory', async () => {
+  await withDaemon(async (daemon) => {
+    await assert.rejects(
+      () =>
+        daemon.sessions.create({
+          workspacePath: fixture,
+          initialPrompt: '',
+          title: null,
+        }),
+      /not a directory/,
+    );
+  });
+});
+
+test('local client can create, stream, end, load, and continue a session', async () => {
+  const workspacePath = makeWorkspace();
+  await withDaemon(async (daemon) => {
+    const events = collectEvents(daemon);
+    const created = await daemon.sessions.create({
+      workspacePath,
+      initialPrompt: '',
+      title: 'probe',
+    });
+
+    assert.equal(created.status, 'idle');
+    assert.equal(created.title, 'probe');
+    assert.equal(created.workspaceId, path.resolve(workspacePath));
+    assert.ok(created.remoteSessionId);
+    assert.ok(created.cursorSessionId);
+    assert.ok(events.some((event) => event.type === 'session.created'));
+
+    await daemon.sessions.send(created.remoteSessionId, 'hello');
+    const messages = events.filter((event) => event.type === 'assistant.message');
+    assert.ok(messages.length >= 2);
+    assert.equal(
+      messages.every((event) => event.payload.delta === true),
+      true,
+    );
+    assert.equal(joinedAssistantText(events), 'echo:hello');
+    assert.ok(events.some((event) => event.type === 'agent.completed'));
+    assert.ok(events.some((event) => event.type === 'assistant.status'));
+
+    const loaded = await daemon.sessions.load(created.remoteSessionId);
+    assert.equal(loaded.remoteSessionId, created.remoteSessionId);
+    assert.equal(loaded.cursorSessionId, created.cursorSessionId);
+    assert.equal(loaded.status, 'idle');
+    assert.ok(events.some((event) => event.type === 'session.loaded'));
+
+    await daemon.sessions.send(created.remoteSessionId, 'follow-up');
+    assert.match(joinedAssistantText(events), /echo:follow-up/);
+    assert.equal(events.filter((event) => event.type === 'agent.completed').length, 2);
+  });
+});
+
+test('session.cancel interrupts a delayed prompt', async () => {
+  const workspacePath = makeWorkspace();
+  await withDaemon(async (daemon) => {
+    const events = collectEvents(daemon);
+    const created = await daemon.sessions.create({
+      workspacePath,
+      initialPrompt: '',
+      title: null,
+    });
+    assert.equal(created.title, 'Session');
+
+    const sending = daemon.sessions.send(created.remoteSessionId, 'DELAY');
+    await waitUntil(() =>
+      events.some(
+        (event) => event.type === 'assistant.status' && event.payload.status === 'thinking',
+      ),
+    );
+    await daemon.sessions.cancel(created.remoteSessionId);
+    await sending;
+
+    assert.ok(events.some((event) => event.type === 'agent.interrupted'));
+    assert.equal(
+      events.some((event) => event.type === 'agent.completed'),
+      false,
+    );
+  });
+});
+
+test('handleCommand covers create, send, cancel, and load', async () => {
+  const workspacePath = makeWorkspace();
+  await withDaemon(async (daemon) => {
+    const events = collectEvents(daemon);
+    const created = await daemon.sessions.handleCommand(
+      parseRemoteCommand(
+        serializeCommand({
+          requestId: 'req-create',
+          sessionId: null,
+          timestamp: new Date().toISOString(),
+          type: 'session.create',
+          payload: {
+            workspaceId: workspacePath,
+            initialPrompt: 'from-command',
+            title: null,
+          },
+        }),
+      ),
+    );
+
+    assert.ok(created);
+    assert.equal(created.status, 'completed');
+    assert.equal(joinedAssistantText(events), 'echo:from-command');
+
+    await daemon.sessions.handleCommand(
+      parseRemoteCommand(
+        serializeCommand({
+          requestId: 'req-load',
+          sessionId: null,
+          timestamp: new Date().toISOString(),
+          type: 'session.load',
+          payload: { remoteSessionId: created.remoteSessionId },
+        }),
+      ),
+    );
+
+    const thinkingBefore = events.filter(
+      (event) => event.type === 'assistant.status' && event.payload.status === 'thinking',
+    ).length;
+    const sending = daemon.sessions.handleCommand(
+      parseRemoteCommand(
+        serializeCommand({
+          requestId: 'req-send',
+          sessionId: created.remoteSessionId,
+          timestamp: new Date().toISOString(),
+          type: 'session.send',
+          payload: { text: 'DELAY' },
+        }),
+      ),
+    );
+    await waitUntil(
+      () =>
+        events.filter(
+          (event) => event.type === 'assistant.status' && event.payload.status === 'thinking',
+        ).length > thinkingBefore,
+    );
+    await daemon.sessions.handleCommand(
+      parseRemoteCommand(
+        serializeCommand({
+          requestId: 'req-cancel',
+          sessionId: created.remoteSessionId,
+          timestamp: new Date().toISOString(),
+          type: 'session.cancel',
+          payload: {},
+        }),
+      ),
+    );
+    await sending;
+    assert.ok(events.some((event) => event.type === 'agent.interrupted'));
+  });
+});

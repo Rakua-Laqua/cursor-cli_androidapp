@@ -1,5 +1,24 @@
 # CHANGELOG
 
+## [0.3.0] - 2026-08-17
+
+### 追加
+
+- Local Daemon に Session Adapter を追加した。`daemon.sessions` および `handleCommand` から Remote Protocol の `session.create` / `session.load` / `session.send` / `session.cancel` を、Cursor ACP の `session/new` / `session/load` / `session/prompt` / `session/cancel`（notification）へ接続する。これら以外の Command type は TASK-102 では受け付けない。Relay と Android の実データフローはまだ有効ではない。
+- 初回の `session.create` または `session.load` で `initialize` と `authenticate`（`methodId` は `cursor_login`）を遅延実行する。`Daemon.start` は従来どおり ACP プロセス起動のみで handshake は行わない。Cursor CLI にログイン済みであることが前提になる。
+- `session.create` の `workspaceId` は実在するディレクトリへのパスとして扱う。ディレクトリでなければ拒否する。ACP へは `cwd` とそのパス、`mcpServers` は空配列を渡す。`title` が null のときは `Session` を使い、`initialPrompt` が空なら作成直後は `idle`、非空なら作成時に prompt を実行する。allowedRoots / symlink 検査は TASK-103。
+- 作成した Session はプロセス内メモリで `remoteSessionId` と ACP の `cursorSessionId` を対応付ける。`session.load` は同一プロセスで作成済みの `remoteSessionId` だけを対象にする。Daemon 再起動後の永続化は TASK-104。
+- ACP の `session/update` のうち `user_message_chunk` を `user.message`、`agent_message_chunk` を `assistant.message`（`delta: true`）、`agent_thought_chunk` を `assistant.status`（`thinking`）へ変換する。`tool_call` などそれ以外の update、permission / file / diff の Event はまだ変換しない。
+- Prompt 開始時に `session.status_changed` と `assistant.status` を `running` にする。`session/prompt` の `stopReason` が `cancelled` なら `agent.interrupted`、それ以外は `agent.completed`。prompt 失敗や ACP の予期しない終了は `agent.failed`。`session.cancel` は ACP へ notification として送る。
+
+### ドキュメント
+
+- `daemon/README.md` の Phase 境界を、TASK-102（Session Adapter と handshake の遅延実行）まで実装済み、Workspace の allowedRoots / symlink 検査は TASK-103 と明記する内容へ更新した。
+
+### テスト
+
+- mock ACP を使って Session の作成・streaming・終了・load・続きの prompt、`session.cancel` による `agent.interrupted`、`handleCommand`、および未知の `session/update` を変換しないことを検証するテストを追加した。
+
 ## [0.2.1] - 2026-08-17
 
 ### 修正
