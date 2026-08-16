@@ -1,5 +1,18 @@
 # CHANGELOG
 
+## [0.2.1] - 2026-08-17
+
+### 修正
+
+- Windows で PATH 上の `agent.cmd` や明示した `.cmd` / `.bat` を、`shell` なしでも `cmd.exe /d /c` 経由で spawn できるようにした。`%LOCALAPPDATA%\cursor-agent\versions` の `node.exe` + `index.js` 起動は従来どおり直接 spawn する。
+- `Daemon.stop` が stdin close を無視する ACP 子プロセスに対し、待ち時間のあと `SIGTERM`、さらに応答しなければ `SIGKILL` を送り、子プロセスが残らないようにした。
+- shutdown 中または終了後に完了する incoming request の応答書き込みや stdin の書き込み失敗で、Daemon プロセスが落ちないようにした。
+- incoming request の handler が値を返さない場合、JSON-RPC 成功応答の `result` を欠かさず `null` として送るようにした。
+
+### テスト
+
+- Windows の `.cmd` spawn、stdin close / `SIGTERM` を無視する子プロセスの強制終了、shutdown 後の非同期 incoming request、`undefined` 結果の `result: null` を検証するテストを追加した。
+
 ## [0.2.0] - 2026-08-17
 
 ### 追加

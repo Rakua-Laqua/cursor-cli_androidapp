@@ -27,6 +27,7 @@ export {
   AcpCommandNotFoundError,
   resolveAcpCommand,
   selectLatestAgentVersionDir,
+  toSpawnableAcpCommand,
   type AcpCommand,
 } from './acp/resolve-command.js';
 

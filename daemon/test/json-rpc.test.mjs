@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { NdjsonBuffer, parseJsonRpcLine } from '../dist/index.js';
+import { NdjsonBuffer, encodeResult, parseJsonRpcLine } from '../dist/index.js';
 
 test('NdjsonBuffer splits newline-delimited messages and keeps a partial line', () => {
   const buffer = new NdjsonBuffer();
@@ -38,4 +38,10 @@ test('parseJsonRpcLine classifies request, notification, success, and error', ()
 test('invalid JSON does not throw', () => {
   const parsed = parseJsonRpcLine('{');
   assert.equal(parsed.kind, 'invalid');
+});
+
+test('encodeResult keeps a JSON-RPC result field when the value is undefined', () => {
+  const parsed = JSON.parse(encodeResult(1, undefined).trim());
+  assert.equal(parsed.result, null);
+  assert.equal(Object.prototype.hasOwnProperty.call(parsed, 'result'), true);
 });

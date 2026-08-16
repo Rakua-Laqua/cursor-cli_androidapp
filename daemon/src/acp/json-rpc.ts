@@ -81,7 +81,7 @@ export function encodeNotification(method: string, params: unknown | undefined):
 }
 
 export function encodeResult(id: JsonRpcId, result: unknown): string {
-  return `${JSON.stringify({ jsonrpc: '2.0', id, result })}\n`;
+  return `${JSON.stringify({ jsonrpc: '2.0', id, result: result === undefined ? null : result })}\n`;
 }
 
 export function encodeError(id: JsonRpcId | null, error: JsonRpcErrorObject): string {

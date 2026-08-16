@@ -5,14 +5,24 @@ function send(message) {
 }
 
 const pendingPeer = new Map();
+const ignoreStdin = process.env.MOCK_ACP_IGNORE_STDIN === '1';
+const ignoreSigterm = process.env.MOCK_ACP_IGNORE_SIGTERM === '1';
 
 process.stderr.write('mock-acp-started\n');
 
+if (ignoreSigterm) {
+  process.on('SIGTERM', () => {
+    process.stderr.write('mock-acp-ignored-sigterm\n');
+  });
+}
+
 const rl = readline.createInterface({ input: process.stdin });
 
-rl.on('close', () => {
-  process.exit(0);
-});
+if (!ignoreStdin) {
+  rl.on('close', () => {
+    process.exit(0);
+  });
+}
 
 rl.on('line', (line) => {
   const trimmed = line.trim();

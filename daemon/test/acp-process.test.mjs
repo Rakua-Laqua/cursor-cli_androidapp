@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
@@ -186,3 +188,107 @@ test('notify writes a JSON-RPC notification without throwing', async () => {
     assert.deepEqual(result, { params: { after: 'notify' } });
   });
 });
+
+test('async incoming request after shutdown does not crash the daemon', async () => {
+  const errors = [];
+  const onUncaught = (error) => {
+    errors.push(error);
+  };
+  process.on('uncaughtException', onUncaught);
+  process.on('unhandledRejection', onUncaught);
+
+  try {
+    let release;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    let started;
+    const startedPromise = new Promise((resolve) => {
+      started = resolve;
+    });
+
+    const daemon = await Daemon.start({
+      acp: {
+        ...mockLaunch(),
+        shutdownTimeoutMs: 200,
+        onIncomingRequest: async () => {
+          started();
+          await gate;
+          return { delayed: true };
+        },
+      },
+    });
+
+    const peer = daemon.acp.request('peer-request').then(
+      (value) => ({ ok: true, value }),
+      (reason) => ({ ok: false, reason }),
+    );
+    await startedPromise;
+    await daemon.stop();
+    release();
+    await peer;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(errors.length, 0);
+    assert.equal(daemon.acp.getState(), 'exited');
+  } finally {
+    process.off('uncaughtException', onUncaught);
+    process.off('unhandledRejection', onUncaught);
+  }
+});
+
+test('undefined incoming request result is sent as JSON-RPC null', async () => {
+  await withDaemon(
+    {
+      onIncomingRequest() {},
+    },
+    async (daemon) => {
+      const result = await daemon.acp.request('peer-request');
+      assert.equal(result.result, null);
+      assert.equal(result.error, null);
+    },
+  );
+});
+
+test('shutdown force-kills a child that ignores stdin close', async () => {
+  const daemon = await Daemon.start({
+    acp: {
+      ...mockLaunch(),
+      env: {
+        ...process.env,
+        MOCK_ACP_IGNORE_STDIN: '1',
+        MOCK_ACP_IGNORE_SIGTERM: '1',
+      },
+      shutdownTimeoutMs: 150,
+    },
+  });
+  const pid = daemon.acp.pid;
+  assert.equal(typeof pid, 'number');
+  assert.equal(pidExists(pid), true);
+  await daemon.stop();
+  assert.equal(daemon.acp.getState(), 'exited');
+  assert.equal(pidExists(pid), false);
+});
+
+test(
+  'Windows .cmd ACP command is spawned via cmd.exe without shell',
+  { skip: process.platform !== 'win32' },
+  async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-cmd-'));
+    const cmdPath = path.join(dir, 'agent.cmd');
+    fs.writeFileSync(cmdPath, `@echo off\r\n"${process.execPath}" "${fixture}" %*\r\n`, 'utf8');
+
+    const daemon = await Daemon.start({
+      acp: {
+        command: cmdPath,
+        args: [],
+        shutdownTimeoutMs: 1000,
+      },
+    });
+    try {
+      const result = await daemon.acp.request('echo', { via: 'cmd' });
+      assert.deepEqual(result, { params: { via: 'cmd' } });
+    } finally {
+      await daemon.stop();
+    }
+  },
+);

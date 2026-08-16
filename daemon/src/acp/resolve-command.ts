@@ -15,13 +15,16 @@ export class AcpCommandNotFoundError extends Error {
   }
 }
 
-export function resolveAcpCommand(env: NodeJS.ProcessEnv = process.env): AcpCommand {
+export function resolveAcpCommand(
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): AcpCommand {
   const fromInstall = resolveFromCursorAgentInstall(env);
   if (fromInstall) {
     return fromInstall;
   }
 
-  const fromPath = resolveFromPath(env);
+  const fromPath = resolveFromPath(env, platform);
   if (fromPath) {
     return fromPath;
   }
@@ -74,14 +77,34 @@ function resolveFromCursorAgentInstall(env: NodeJS.ProcessEnv): AcpCommand | und
   return undefined;
 }
 
-function resolveFromPath(env: NodeJS.ProcessEnv): AcpCommand | undefined {
+export function toSpawnableAcpCommand(
+  command: string,
+  args: readonly string[] = [],
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): AcpCommand {
+  if (platform === 'win32' && isWindowsBatchFile(command)) {
+    const comSpec = env.ComSpec ?? env.COMSPEC ?? 'cmd.exe';
+    return { command: comSpec, args: ['/d', '/c', command, ...args] };
+  }
+  return { command, args };
+}
+
+function isWindowsBatchFile(command: string): boolean {
+  const lower = command.toLowerCase();
+  return lower.endsWith('.cmd') || lower.endsWith('.bat');
+}
+
+function resolveFromPath(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+): AcpCommand | undefined {
   const pathValue = env.PATH ?? env.Path;
   if (!pathValue) {
     return undefined;
   }
 
-  const names =
-    process.platform === 'win32' ? ['agent.cmd', 'agent.exe', 'agent'] : ['agent', 'agent.exe'];
+  const names = platform === 'win32' ? ['agent.cmd', 'agent.exe', 'agent'] : ['agent', 'agent.exe'];
 
   for (const dir of pathValue.split(delimiter)) {
     if (!dir) {
@@ -90,7 +113,7 @@ function resolveFromPath(env: NodeJS.ProcessEnv): AcpCommand | undefined {
     for (const name of names) {
       const candidate = join(dir, name);
       if (existsSync(candidate)) {
-        return { command: candidate, args: ['acp'] };
+        return toSpawnableAcpCommand(candidate, ['acp'], platform, env);
       }
     }
   }

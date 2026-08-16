@@ -4,7 +4,11 @@ import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 
-import { resolveAcpCommand, selectLatestAgentVersionDir } from '../dist/index.js';
+import {
+  resolveAcpCommand,
+  selectLatestAgentVersionDir,
+  toSpawnableAcpCommand,
+} from '../dist/index.js';
 
 test('selectLatestAgentVersionDir prefers the newest dated Cursor agent version', () => {
   assert.equal(
@@ -36,4 +40,36 @@ test('resolveAcpCommand uses the latest node.exe + index.js acp launch on Window
 
   assert.equal(resolved.command, path.join(newer, 'node.exe'));
   assert.deepEqual(resolved.args, [path.join(newer, 'index.js'), 'acp']);
+});
+
+test('PATH fallback wraps Windows agent.cmd so it can be spawned without shell', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'acp-path-'));
+  const bin = path.join(root, 'bin');
+  fs.mkdirSync(bin, { recursive: true });
+  const cmdPath = path.join(bin, 'agent.cmd');
+  fs.writeFileSync(cmdPath, '');
+
+  const resolved = resolveAcpCommand(
+    {
+      LOCALAPPDATA: path.join(root, 'empty-local'),
+      PATH: bin,
+      ComSpec: 'C:\\Windows\\System32\\cmd.exe',
+    },
+    'win32',
+  );
+
+  assert.equal(resolved.command, 'C:\\Windows\\System32\\cmd.exe');
+  assert.deepEqual(resolved.args, ['/d', '/c', cmdPath, 'acp']);
+});
+
+test('toSpawnableAcpCommand wraps .cmd and .bat on Windows', () => {
+  const wrapped = toSpawnableAcpCommand('C:\\tools\\agent.cmd', ['acp'], 'win32', {
+    ComSpec: 'C:\\Windows\\System32\\cmd.exe',
+  });
+  assert.equal(wrapped.command, 'C:\\Windows\\System32\\cmd.exe');
+  assert.deepEqual(wrapped.args, ['/d', '/c', 'C:\\tools\\agent.cmd', 'acp']);
+
+  const exe = toSpawnableAcpCommand('C:\\tools\\agent.exe', ['acp'], 'win32', {});
+  assert.equal(exe.command, 'C:\\tools\\agent.exe');
+  assert.deepEqual(exe.args, ['acp']);
 });

@@ -10,6 +10,7 @@ import {
   type JsonRpcErrorObject,
   type JsonRpcId,
 } from './json-rpc.js';
+import { toSpawnableAcpCommand } from './resolve-command.js';
 
 export type AcpProcessState = 'running' | 'stopping' | 'exited';
 
@@ -82,7 +83,13 @@ const DEFAULT_SHUTDOWN_TIMEOUT_MS = 3_000;
 
 export class AcpProcess {
   static async spawn(options: AcpProcessOptions): Promise<AcpProcess> {
-    const child = spawn(options.command, [...(options.args ?? [])], {
+    const launch = toSpawnableAcpCommand(
+      options.command,
+      options.args ?? [],
+      process.platform,
+      process.env,
+    );
+    const child = spawn(launch.command, [...launch.args], {
       cwd: options.cwd,
       env: {
         ...process.env,
@@ -154,6 +161,9 @@ export class AcpProcess {
     child.stderr.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => this.handleStdout(chunk));
     child.stderr.on('data', (chunk: string) => this.handleStderr(chunk));
+    child.stdin.on('error', (error: Error) => {
+      this.logger.error(`ACP stdin error: ${error.message}`);
+    });
     child.on('error', (error) => {
       this.logger.error(`ACP process error: ${error.message}`);
     });
@@ -227,14 +237,10 @@ export class AcpProcess {
 
     const completed = await this.waitForExit(this.shutdownTimeoutMs);
     if (!completed) {
-      this.child.kill();
-      const killed = await this.waitForExit(this.shutdownTimeoutMs);
-      if (!killed && this.pid !== undefined) {
-        try {
-          process.kill(this.pid);
-        } catch {
-          // already gone
-        }
+      this.child.kill('SIGTERM');
+      const terminated = await this.waitForExit(this.shutdownTimeoutMs);
+      if (!terminated) {
+        this.child.kill('SIGKILL');
         await this.waitForExit(this.shutdownTimeoutMs);
       }
     }
@@ -307,6 +313,10 @@ export class AcpProcess {
   }
 
   private async handleIncomingRequest(request: AcpIncomingRequest): Promise<void> {
+    if (this.state !== 'running') {
+      return;
+    }
+
     try {
       if (!this.onIncomingRequest) {
         this.write(
@@ -320,12 +330,12 @@ export class AcpProcess {
       }
 
       const result = await this.onIncomingRequest(request);
-      if (this.state === 'exited') {
+      if (this.state !== 'running') {
         return;
       }
       this.write(encodeResult(request.id, result));
     } catch (error) {
-      if (this.state === 'exited') {
+      if (this.state !== 'running') {
         return;
       }
       this.write(
@@ -381,10 +391,16 @@ export class AcpProcess {
   }
 
   private write(payload: string): void {
-    if (this.state === 'exited') {
+    if (this.state !== 'running') {
       return;
     }
-    this.child.stdin.write(payload);
+    try {
+      this.child.stdin.write(payload);
+    } catch (error) {
+      this.logger.error(
+        `ACP stdin write failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   private async waitForExit(timeoutMs: number): Promise<boolean> {
