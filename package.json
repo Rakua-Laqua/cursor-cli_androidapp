@@ -1,5 +1,6 @@
 {
   "name": "cursor-cli-androidapp",
+  "version": "0.1.0",
   "private": true,
   "workspaces": [
     "protocol",
