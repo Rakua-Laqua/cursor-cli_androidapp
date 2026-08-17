@@ -158,6 +158,27 @@ export interface RemoteCommand<
   readonly payload: TPayload;
 }
 
+export interface RemoteCommandResult {
+  readonly requestId: string;
+  readonly ok: boolean;
+  readonly value: JsonValue | null;
+  readonly error: string | null;
+}
+
+export type RemoteFrame =
+  | {
+      readonly kind: 'command';
+      readonly command: RemoteCommand;
+    }
+  | {
+      readonly kind: 'event';
+      readonly event: ParsedRemoteEvent;
+    }
+  | {
+      readonly kind: 'result';
+      readonly result: RemoteCommandResult;
+    };
+
 export interface WorkspaceListCommandPayload extends JsonObject {}
 
 export interface WorkspaceRegisterCommandPayload extends JsonObject {
@@ -203,9 +224,93 @@ export function serializeCommand(command: RemoteCommand): string {
   return JSON.stringify(command);
 }
 
+export function serializeRemoteCommandResult(result: RemoteCommandResult): string {
+  return JSON.stringify(toResultObject(result));
+}
+
+export function serializeRemoteFrame(frame: RemoteFrame): string {
+  if (frame.kind === 'command') {
+    return JSON.stringify({ kind: 'command', command: frame.command });
+  }
+  if (frame.kind === 'event') {
+    return JSON.stringify({ kind: 'event', event: frame.event });
+  }
+  return JSON.stringify({ kind: 'result', result: toResultObject(frame.result) });
+}
+
+export function remoteCommandSuccess(
+  requestId: string,
+  value: JsonValue | null | undefined,
+): RemoteCommandResult {
+  return {
+    requestId,
+    ok: true,
+    value: value ?? null,
+    error: null,
+  };
+}
+
+export function remoteCommandFailure(requestId: string, error: unknown): RemoteCommandResult {
+  return {
+    requestId,
+    ok: false,
+    value: null,
+    error: sanitizeRemoteErrorMessage(error),
+  };
+}
+
+export function sanitizeRemoteErrorMessage(error: unknown): string {
+  let message = 'Error';
+  if (error instanceof Error) {
+    message = error.message;
+  } else if (typeof error === 'string') {
+    message = error;
+  }
+  const firstLine = message.split(/\r?\n/, 1)[0]?.trim() ?? '';
+  return firstLine.length > 0 ? firstLine : 'Error';
+}
+
 export function parseRemoteEvent(json: string): ParsedRemoteEvent {
+  return parseEventRecord(JSON.parse(json));
+}
+
+export function parseRemoteCommand(json: string): RemoteCommand {
+  return parseCommandRecord(JSON.parse(json));
+}
+
+export function parseRemoteCommandResult(json: string): RemoteCommandResult {
+  return parseResultRecord(JSON.parse(json));
+}
+
+export function parseRemoteFrame(json: string): RemoteFrame {
   const parsed: unknown = JSON.parse(json);
-  const envelope = parseEventEnvelope(parsed);
+  if (!isRecord(parsed)) {
+    throw new ProtocolParseError('Frame must be a JSON object.');
+  }
+
+  const kind = parsed.kind;
+  if (kind === 'command') {
+    return { kind: 'command', command: parseCommandRecord(parsed.command) };
+  }
+  if (kind === 'event') {
+    return { kind: 'event', event: parseEventRecord(parsed.event) };
+  }
+  if (kind === 'result') {
+    return { kind: 'result', result: parseResultRecord(parsed.result) };
+  }
+
+  throw new ProtocolParseError('kind must be command, event, or result.');
+}
+
+export class ProtocolParseError extends Error {
+  public constructor(message: string) {
+    super(message);
+    this.name = 'ProtocolParseError';
+  }
+}
+
+function parseEventRecord(value: unknown): ParsedRemoteEvent {
+  const envelope = parseEventEnvelope(value);
 
   if (isKnownEventType(envelope.type)) {
     return envelope as KnownRemoteEvent;
@@ -217,17 +322,16 @@ export function parseRemoteEvent(json: string): ParsedRemoteEvent {
   };
 }
 
-export function parseRemoteCommand(json: string): RemoteCommand {
-  const parsed: unknown = JSON.parse(json);
-  if (!isRecord(parsed)) {
+function parseCommandRecord(value: unknown): RemoteCommand {
+  if (!isRecord(value)) {
     throw new ProtocolParseError('Command must be a JSON object.');
   }
 
-  const requestId = requireString(parsed, 'requestId');
-  const sessionId = requireNullableString(parsed, 'sessionId');
-  const timestamp = requireString(parsed, 'timestamp');
-  const type = requireString(parsed, 'type');
-  const payload = requireJsonObject(parsed, 'payload');
+  const requestId = requireString(value, 'requestId');
+  const sessionId = requireNullableString(value, 'sessionId');
+  const timestamp = requireString(value, 'timestamp');
+  const type = requireString(value, 'type');
+  const payload = requireJsonObject(value, 'payload');
 
   if (!isKnownCommandType(type)) {
     throw new ProtocolParseError(`Unknown command type: ${type}`);
@@ -236,11 +340,56 @@ export function parseRemoteCommand(json: string): RemoteCommand {
   return { requestId, sessionId, timestamp, type, payload };
 }
 
-export class ProtocolParseError extends Error {
-  public constructor(message: string) {
-    super(message);
-    this.name = 'ProtocolParseError';
+function parseResultRecord(value: unknown): RemoteCommandResult {
+  if (!isRecord(value)) {
+    throw new ProtocolParseError('Result must be a JSON object.');
   }
+
+  const requestId = requireString(value, 'requestId');
+  if (typeof value.ok !== 'boolean') {
+    throw new ProtocolParseError('ok must be a boolean.');
+  }
+  if (!('value' in value) || (value.value !== null && !isJsonValue(value.value))) {
+    throw new ProtocolParseError('value must be valid JSON data or null.');
+  }
+  const error = value.error;
+  if (error !== null && (typeof error !== 'string' || error.length === 0)) {
+    throw new ProtocolParseError('error must be a non-empty string or null.');
+  }
+
+  if (value.ok) {
+    if (error !== null) {
+      throw new ProtocolParseError('successful result must have error null.');
+    }
+    return {
+      requestId,
+      ok: true,
+      value: value.value as JsonValue | null,
+      error: null,
+    };
+  }
+
+  if (value.value !== null) {
+    throw new ProtocolParseError('failed result must have value null.');
+  }
+  if (error === null) {
+    throw new ProtocolParseError('failed result must have a non-empty error.');
+  }
+  return {
+    requestId,
+    ok: false,
+    value: null,
+    error,
+  };
+}
+
+function toResultObject(result: RemoteCommandResult): RemoteCommandResult {
+  return {
+    requestId: result.requestId,
+    ok: result.ok,
+    value: result.ok ? (result.value ?? null) : null,
+    error: result.ok ? null : sanitizeRemoteErrorMessage(result.error ?? 'Error'),
+  };
 }
 
 function parseEventEnvelope(value: unknown): EventEnvelope<string, JsonValue> {

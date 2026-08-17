@@ -1,5 +1,25 @@
 # CHANGELOG
 
+## [1.3.0] - 2026-08-17
+
+### 追加
+
+- Relay WebSocket Core を追加した。Local Daemon は `/machine` へ outbound 接続し、`/client` から受けた Remote Protocol の `workspace.*` / `session.*` Command を中継する。`requestId` で応答を送信元 client へ返し、Workspace / Session Event は同じ Machine の client へ転送する。Relay は Command / Event、ソースコード、ファイル内容を永続化しない。
+- WebSocket の ping / pong heartbeat、stale connection 終了、Machine 切断時の pending request エラー化、offline 中の Command 拒否、Machine 置換後の旧 connection 無効化を追加した。
+
+### 変更
+
+- Remote Protocol に `command` / `event` / `result` frame と `RemoteCommandResult` を追加した。成功時の未定義値は JSON `null`、失敗時は stack trace を含まない単一行メッセージとして扱う。既存の Event / Command 形式は維持する。
+- ルートの `npm test` で Protocol、Daemon、Relay の build と test を一連で実行する。WebSocket 実装には `ws` 8.21.3 と `@types/ws` 8.18.1 を使用する。
+
+### セキュリティ
+
+- 現段階の Relay は localhost 用の非認証 `ws://` core であり、インターネットへ公開しない。Pairing、device authentication、TLS、Android client は TASK-201 以降で実装する。
+
+### テスト
+
+- Protocol frame/result の round-trip と不整合拒否、Relay の routing / correlation / heartbeat / disconnect / replacement、mock ACP での Workspace 登録・Session 作成・streaming・cancel・Daemon 再起動・load・会話継続を WebSocket 越しに検証した。
+
 ## [1.2.1] - 2026-08-17
 
 ### 変更

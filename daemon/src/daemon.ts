@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 
 import type {
+  KnownRemoteEvent,
   RemoteCommand,
   SessionPayload,
   WorkspaceUpdatedPayload,
@@ -91,6 +92,15 @@ export class Daemon {
 
   get workspaces(): WorkspaceManager {
     return this.workspaceManager;
+  }
+
+  onEvent(listener: (event: KnownRemoteEvent) => void): () => void {
+    const stopSessions = this.sessionAdapter.onEvent(listener);
+    const stopWorkspaces = this.workspaceManager.onEvent(listener);
+    return () => {
+      stopSessions();
+      stopWorkspaces();
+    };
   }
 
   async handleCommand(
