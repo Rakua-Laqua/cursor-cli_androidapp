@@ -31,30 +31,36 @@ npm run format:check
 
 ## Local E2E
 
-Phase 1 の完了条件は、Cursor Desktop なしで Local Daemon だけから Workspace 指定・Session 作成・ストリーミング・停止・再起動後の再開ができることです。簡易クライアントは `remote-dev` です。Windows 上の mock ACP 確認は `docs/local_e2e_report.md` に記録済みです。
+Phase 1 の完了条件は、Cursor Desktop なしで Local Daemon だけから Workspace 指定・Session 作成・ストリーミング・停止・再起動後の再開ができることです。簡易クライアントは `remote-dev` です。Windows 上の実 Cursor CLI 確認は `docs/local_e2e_report.md` に記録済みです。
 
-リポジトリルート:
+リポジトリルートで実 Cursor CLI:
 
 ```bat
 npm run build
 npm run remote-dev -- --help
+npm run remote-dev -- e2e
+```
+
+mock ACP（`npm test` でも実行）:
+
+```bat
 npm run remote-dev -- e2e --acp-command node --acp-arg test/fixtures/mock-acp.mjs
 ```
 
-成功時の末尾は次の形です。UUID と一時パスは実行ごとに変わります。
+成功時の末尾は次の形です。UUID・一時パス・token は実行ごとに変わります。
 
 ```text
 workspace selected <workspaceId> <temp>\project
 session created <remoteSessionId>
-streamed echo:e2e-stream
+streamed E2ESTR_<token>
 cancelled
 daemon restarted
 session loaded <remoteSessionId>
-continued echo:e2e-continue
+continued E2ECON_<token>
 e2e ok <remoteSessionId>
 ```
 
-`npm test` も同じ一連を mock ACP で実行します。実 Cursor CLI を使う場合は `--acp-command` を付けず、`--state-dir` と `--allowed-root` を明示します。リポジトリ全体を既定の許可ルートにはしません。
+`--acp-command` を省略すると実 Cursor CLI の ACP を解決します。`--state-dir` と `--allowed-root` を省略した `e2e` は一時ディレクトリを使います。リポジトリ全体を既定の許可ルートにはしません。実行中の停止は `session send` の Ctrl+C、または in-process の `e2e` です。単発 `session cancel` は公開しません。
 
 ## Android
 
@@ -67,4 +73,4 @@ Phase 0 の Android アプリは起動確認用の最小 Compose 画面だけを
 
 ## Phase boundary
 
-Phase 1 の Local Daemon / ACP / Workspace / Session / metadata / Local E2E は `remote-dev` と `npm test` で固定します。実機の Cursor CLI / ACP Capability は `docs/acp_capability_report.md`、mock ACP での Local E2E は `docs/local_e2e_report.md` に記録済みです。未観測の機能を存在する前提で実装しないという拘束は維持します。Relay と Android の実データフローは Phase 2 です。
+Phase 1 の Local Daemon / ACP / Workspace / Session / metadata / Local E2E は `remote-dev` で固定します。実機の Cursor CLI / ACP Capability は `docs/acp_capability_report.md`、TASK-105 の一連確認は `docs/local_e2e_report.md` に記録済みです。未観測の機能を存在する前提で実装しないという拘束は維持します。Relay と Android の実データフローは Phase 2 です。

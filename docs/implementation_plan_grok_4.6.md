@@ -328,8 +328,9 @@ remote-dev workspace list
 remote-dev session create <workspace>
 remote-dev session list
 remote-dev session send <session> "..."
-remote-dev session cancel <session>
 ```
+
+単発 `session cancel` は、別 ACP プロセスの prompt を止められることが実測されていないため公開しない。cancel は in-process の `e2e`、または `session send` 中の Ctrl+C。
 
 ### 完了条件
 
@@ -350,7 +351,7 @@ workspace select
 
 ### 実施記録
 
-2026-08-17、Windows 上で mock ACP に対する `remote-dev e2e` が成功した。記録は `docs/local_e2e_report.md`。実 Cursor CLI に対する `remote-dev e2e` は未実施。
+2026-08-17、Windows 上で実 Cursor CLI に対する `remote-dev e2e` が成功した。記録は `docs/local_e2e_report.md`。mock ACP 経路は回帰として残す。単発 `session cancel` は未実測のため非公開。
 
 ---
 
@@ -1046,7 +1047,7 @@ TASK-105 Local E2Eが成功するまでAndroid実装へ進まない。
 理由:
 Cursor CLI / ACP側が成立しない状態でAndroidを作ると、UIが未確定Backend APIへ依存する。
 
-2026-08-17: mock ACP での Local E2E は成功。記録は `docs/local_e2e_report.md`。
+2026-08-17: 実 Cursor CLI での Local E2E は成功。記録は `docs/local_e2e_report.md`。Gate A を通過。
 
 ## Gate B
 
@@ -1095,4 +1096,4 @@ Milestone 1 — Cursor CLI Local Core
 
 **Cursor Desktopを一度も起動せず、PC上のLocal DaemonだけでWorkspaceを指定し、Cursor Sessionを作成・継続・再開・停止できる。**
 
-この状態を確認してからRelayとAndroidへ進む。mock ACP での確認記録は `docs/local_e2e_report.md`。
+この状態を確認してからRelayとAndroidへ進む。確認記録は `docs/local_e2e_report.md`。

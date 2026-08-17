@@ -75,12 +75,12 @@ async function handlePrompt(id, params) {
     content: { type: 'text', text: 'thinking' },
   });
 
-  if (text === 'DELAY') {
-    const cancelled = await waitForCancel(sessionId, 8000);
+  const cancelled = await waitForCancel(sessionId, text === 'DELAY' ? 8000 : 250);
+  if (cancelled) {
     send({
       jsonrpc: '2.0',
       id,
-      result: { stopReason: cancelled ? 'cancelled' : 'end_turn' },
+      result: { stopReason: 'cancelled' },
     });
     return;
   }

@@ -1,5 +1,24 @@
 # CHANGELOG
 
+## [1.2.1] - 2026-08-17
+
+### 変更
+
+- `remote-dev e2e` は mock 固有の `echo:` / `DELAY` 契約を使わない。初回と follow-up は一意 token（`E2ESTR_` / `E2ECON_`）を含む `assistant.message` を確認し、streaming は `agent.completed` / `agent.failed` / `agent.interrupted` より前に `assistant.message` が届いたことで判定する。cancel は長い回答を要求した直後に in-process の `session/cancel` notification を送る。e2e 中の `session/request_permission` には、TASK-100 で観測した `reject-once` を返す。
+- `--acp-command` を省略した `remote-dev e2e` は実 Cursor CLI の ACP で一連操作できる。mock ACP 経路は回帰として残す。
+
+### 削除
+
+- 単発 `session cancel` は公開しない。各起動が新しい ACP プロセスになるため、別プロセスの prompt を止められることは実測していない。実行中の停止は `session send` の Ctrl+C、または in-process の `e2e`。呼び出した場合は usage error になる。
+
+### ドキュメント
+
+- `docs/local_e2e_report.md` に、Windows 上で実 Cursor CLI（`--acp-command` 省略）に対する `remote-dev e2e` が成功したことを記録した。出力は `streamed E2ESTR_...` → `cancelled` → `daemon restarted` → `session loaded` → `continued E2ECON_...` → `e2e ok`。Gate A は実 Cursor CLI 経路で通過。Relay / Android は未着手。
+
+### テスト
+
+- token 含有と in-process cancel による e2e、単発 `session cancel` が usage error になることを検証するテストを更新した。
+
 ## [1.2.0] - 2026-08-17
 
 ### 追加

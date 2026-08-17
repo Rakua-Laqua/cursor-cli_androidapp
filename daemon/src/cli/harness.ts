@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 import { mkdirSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,6 +9,7 @@ import type {
   WorkspaceUpdatedPayload,
 } from '@cursor-remote/protocol';
 
+import type { AcpIncomingRequest } from '../acp/process.js';
 import { Daemon, type DaemonAcpOptions, type DaemonStartOptions } from '../daemon.js';
 import {
   RemoteDevUsageError,
@@ -16,9 +18,6 @@ import {
   type RemoteDevCommand,
 } from './argv.js';
 
-const STREAM_PROMPT = 'e2e-stream';
-const CONTINUE_PROMPT = 'e2e-continue';
-const CANCEL_PROMPT = 'DELAY';
 const STREAMABLE_EVENT_TYPES = new Set([
   'user.message',
   'assistant.message',
@@ -28,6 +27,8 @@ const STREAMABLE_EVENT_TYPES = new Set([
   'agent.failed',
   'agent.interrupted',
 ]);
+const TERMINAL_EVENT_TYPES = new Set(['agent.completed', 'agent.failed', 'agent.interrupted']);
+const REAL_ACP_REQUEST_TIMEOUT_MS = 120_000;
 
 export interface RemoteDevIo {
   stdout: { write(chunk: string): void };
@@ -77,6 +78,8 @@ export async function runLocalE2e(
   let streamChunks: number;
   let streamedText: string;
   let interrupted: boolean;
+  const streamToken = uniqueToken('E2ESTR');
+  const continueToken = uniqueToken('E2ECON');
 
   const first = await Daemon.start(withoutWorkspacePath(options));
   try {
@@ -95,20 +98,18 @@ export async function runLocalE2e(
     const firstEvents: KnownRemoteEvent[] = [];
     const stopFirst = first.sessions.onEvent((event) => firstEvents.push(event));
     try {
-      await first.sessions.send(remoteSessionId, STREAM_PROMPT);
+      await first.sessions.send(remoteSessionId, tokenPrompt(streamToken));
       streamChunks = assistantChunks(firstEvents).length;
       streamedText = joinedAssistantText(firstEvents);
-      if (streamChunks < 2) {
-        throw new Error('expected streaming assistant.message deltas');
+      if (!assistantArrivedBeforeTerminal(firstEvents)) {
+        throw new Error('expected assistant.message before a terminal event');
       }
-      if (streamedText !== `echo:${STREAM_PROMPT}`) {
-        throw new Error(`unexpected streamed text: ${streamedText}`);
+      if (!streamedText.includes(streamToken)) {
+        throw new Error(`streamed text did not include token ${streamToken}`);
       }
-      onLog(`streamed ${streamedText}`);
+      onLog(`streamed ${streamToken}`);
 
-      const thinkingBefore = countThinking(firstEvents);
-      const sending = first.sessions.send(remoteSessionId, CANCEL_PROMPT);
-      await waitUntil(() => countThinking(firstEvents) > thinkingBefore);
+      const sending = first.sessions.send(remoteSessionId, cancelPrompt());
       await first.sessions.cancel(remoteSessionId);
       await sending;
       interrupted = firstEvents.some((event) => event.type === 'agent.interrupted');
@@ -136,12 +137,15 @@ export async function runLocalE2e(
     const secondEvents: KnownRemoteEvent[] = [];
     const stopSecond = second.sessions.onEvent((event) => secondEvents.push(event));
     try {
-      await second.sessions.send(remoteSessionId, CONTINUE_PROMPT);
+      await second.sessions.send(remoteSessionId, tokenPrompt(continueToken));
       const continuedText = joinedAssistantText(secondEvents);
-      if (continuedText !== `echo:${CONTINUE_PROMPT}`) {
-        throw new Error(`unexpected continued text: ${continuedText}`);
+      if (!assistantArrivedBeforeTerminal(secondEvents)) {
+        throw new Error('expected follow-up assistant.message before a terminal event');
       }
-      onLog(`continued ${continuedText}`);
+      if (!continuedText.includes(continueToken)) {
+        throw new Error(`continued text did not include token ${continueToken}`);
+      }
+      onLog(`continued ${continueToken}`);
       return {
         workspaceId,
         remoteSessionId,
@@ -190,18 +194,18 @@ function toStartOptions(
   allowedRoots: readonly string[],
   parsed: ParsedRemoteDevArgv,
 ): DaemonStartOptions {
+  const acp: DaemonAcpOptions = {
+    shutdownTimeoutMs: parsed.acpCommand !== undefined ? 1000 : 10_000,
+    requestTimeoutMs: REAL_ACP_REQUEST_TIMEOUT_MS,
+    onIncomingRequest: rejectAcpPeerRequest,
+    ...(parsed.acpCommand !== undefined
+      ? { command: parsed.acpCommand, args: parsed.acpArgs }
+      : {}),
+  };
   return {
     stateDir,
     workspaces: { allowedRoots },
-    ...(parsed.acpCommand !== undefined
-      ? {
-          acp: {
-            command: parsed.acpCommand,
-            args: parsed.acpArgs,
-            shutdownTimeoutMs: 1000,
-          } satisfies DaemonAcpOptions,
-        }
-      : { acp: { shutdownTimeoutMs: 5000 } }),
+    acp,
   };
 }
 
@@ -261,9 +265,6 @@ async function executeCommand(
     case 'session.send':
       await daemon.sessions.load(command.remoteSessionId);
       await sendAndStream(daemon, command.remoteSessionId, command.text, io, json);
-      return;
-    case 'session.cancel':
-      await daemon.sessions.cancel(command.remoteSessionId);
       return;
     case 'session.load': {
       writeResult(io, json, await daemon.sessions.load(command.remoteSessionId));
@@ -353,18 +354,40 @@ function joinedAssistantText(events: readonly KnownRemoteEvent[]): string {
     .join('');
 }
 
-function countThinking(events: readonly KnownRemoteEvent[]): number {
-  return events.filter(
-    (event) => event.type === 'assistant.status' && event.payload.status === 'thinking',
-  ).length;
+function uniqueToken(prefix: string): string {
+  return `${prefix}_${randomBytes(8).toString('hex')}`;
 }
 
-export async function waitUntil(predicate: () => boolean, timeoutMs = 2000): Promise<void> {
-  const started = Date.now();
-  while (!predicate()) {
-    if (Date.now() - started > timeoutMs) {
-      throw new Error('timed out waiting for condition');
-    }
-    await new Promise((resolve) => setTimeout(resolve, 10));
+function tokenPrompt(token: string): string {
+  return [
+    `Reply with a short text that includes this exact token: ${token}`,
+    'Do not call tools. Do not ask questions. Put the token in the reply.',
+  ].join(' ');
+}
+
+function cancelPrompt(): string {
+  return [
+    'Write a very long answer.',
+    'Count from 1 to 400, and write one full sentence for each number.',
+    'Do not stop early. Do not call tools. Do not ask questions.',
+  ].join(' ');
+}
+
+function rejectAcpPeerRequest(request: AcpIncomingRequest): unknown {
+  if (request.method === 'session/request_permission') {
+    return { outcome: { outcome: 'selected', optionId: 'reject-once' } };
   }
+  throw new Error(`Unhandled ACP request: ${request.method}`);
+}
+
+function assistantArrivedBeforeTerminal(events: readonly KnownRemoteEvent[]): boolean {
+  for (const event of events) {
+    if (event.type === 'assistant.message') {
+      return true;
+    }
+    if (TERMINAL_EVENT_TYPES.has(event.type)) {
+      return false;
+    }
+  }
+  return false;
 }

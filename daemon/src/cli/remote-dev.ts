@@ -9,7 +9,6 @@ export { parseRemoteDevArgv, RemoteDevUsageError, USAGE } from './argv.js';
 export {
   runLocalE2e,
   runParsedRemoteDev,
-  waitUntil,
   type LocalE2eResult,
   type RemoteDevIo,
 } from './harness.js';

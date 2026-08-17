@@ -10,26 +10,31 @@ Phase 1 の TASK-104 では、Workspace と Session の metadata を `stateDir/m
 
 ## Local E2E
 
-`remote-dev` は Relay / Android の前に Phase 1 を固定する簡易クライアントです。mock ACP に対する一連操作は `npm test` に含まれます。2026-08-17 の Windows 確認（mock ACP）は `docs/local_e2e_report.md` に記録済みです。
+`remote-dev` は Relay / Android の前に Phase 1 を固定する簡易クライアントです。2026-08-17 の Windows 確認（実 Cursor CLI と mock ACP）は `docs/local_e2e_report.md` に記録済みです。
 
-リポジトリルート:
+リポジトリルートで実 Cursor CLI:
 
 ```bat
 npm run build
-npm run remote-dev -- --help
+npm run remote-dev -- e2e
+```
+
+mock ACP（`npm test` にも含まれる）:
+
+```bat
 npm run remote-dev -- e2e --acp-command node --acp-arg test/fixtures/mock-acp.mjs
 ```
 
-`--acp-arg` のパスは daemon ワークスペース基準です。成功時は `streamed echo:e2e-stream`、`cancelled`、`daemon restarted`、`continued echo:e2e-continue`、`e2e ok <remoteSessionId>` まで進みます。
+`--acp-arg` のパスは daemon ワークスペース基準です。成功時は `streamed E2ESTR_...`、`cancelled`、`daemon restarted`、`continued E2ECON_...`、`e2e ok <remoteSessionId>` まで進みます。
 
-単発コマンドは `--state-dir` と `--allowed-root` が必要です。リポジトリルートは既定の許可ルートになりません。各コマンドが ACP を起動し直すため、`session send` は送る前に Cursor 側 Session を `session.load` します。実行中の streaming を止める場合は `session send` を Ctrl+C するか、`e2e` コマンドを使います。
+単発コマンドは `--state-dir` と `--allowed-root` が必要です。リポジトリルートは既定の許可ルートになりません。各コマンドが ACP を起動し直すため、`session send` は送る前に Cursor 側 Session を `session.load` します。実行中の streaming を止める場合は `session send` を Ctrl+C するか、`e2e` コマンドを使います。単発 `session cancel` は、別プロセスの prompt を止められることが実測されていないため公開しません。
 
 ```bash
 npm run remote-dev -- --state-dir ./runtime-data --allowed-root <workspace> workspace select <workspace>
 npm run remote-dev -- --state-dir ./runtime-data --allowed-root <workspace> session create <workspaceId>
 npm run remote-dev -- --state-dir ./runtime-data --allowed-root <workspace> session list
 npm run remote-dev -- --state-dir ./runtime-data --allowed-root <workspace> session send <sessionId> "..."
-npm run remote-dev -- --state-dir ./runtime-data --allowed-root <workspace> session cancel <sessionId>
+npm run remote-dev -- --state-dir ./runtime-data --allowed-root <workspace> session load <sessionId>
 ```
 
 `--acp-command` を省略すると実 Cursor CLI の ACP を解決します。Cursor Desktop は不要です。Relay と Android の実データフローは Phase 2 です。

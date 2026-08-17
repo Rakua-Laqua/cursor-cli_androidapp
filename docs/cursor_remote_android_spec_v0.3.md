@@ -1457,7 +1457,7 @@ Push対象:
 - Streaming response
 - Local Session metadata
 
-このPhase終了時点で、PCローカルの簡易クライアントからCursor Desktopなしで継続Sessionを操作できること。mock ACP での確認記録は `docs/local_e2e_report.md`。
+このPhase終了時点で、PCローカルの簡易クライアントからCursor Desktopなしで継続Sessionを操作できること。確認記録は `docs/local_e2e_report.md`。
 
 ### Phase 2 — Android Remote
 

@@ -7,7 +7,6 @@ export const USAGE = `Usage:
   remote-dev [options] session create <workspaceId>
   remote-dev [options] session list [workspaceId]
   remote-dev [options] session send <sessionId> <text>
-  remote-dev [options] session cancel <sessionId>
   remote-dev [options] session load <sessionId>
   remote-dev [options] e2e
 
@@ -25,8 +24,10 @@ Options:
 e2e creates temporary state/workspace directories when those options are omitted.
 One-shot commands require --state-dir and --allowed-root. The repository root is
 never used as a default allowed root. session send loads the Cursor session first
-because each invocation starts a new ACP process. Streaming cancel is Ctrl+C on
-session send, or the in-process e2e command.
+because each invocation starts a new ACP process. Cancel a running prompt with
+Ctrl+C on session send, or use the in-process e2e command. One-shot session
+cancel is not supported: it would start a new ACP process and cannot interrupt
+another process.
 `;
 
 export class RemoteDevUsageError extends Error {
@@ -49,7 +50,6 @@ export type RemoteDevCommand =
       readonly initialPrompt: string;
     }
   | { readonly kind: 'session.send'; readonly remoteSessionId: string; readonly text: string }
-  | { readonly kind: 'session.cancel'; readonly remoteSessionId: string }
   | { readonly kind: 'session.load'; readonly remoteSessionId: string };
 
 export interface ParsedRemoteDevArgv {
@@ -225,16 +225,18 @@ function parseCommand(
       }
       return { kind: 'session.send', remoteSessionId, text };
     }
-    if (action === 'cancel' || action === 'load') {
+    if (action === 'cancel') {
+      throw new RemoteDevUsageError(
+        'one-shot session cancel is not supported; use Ctrl+C on session send, or the e2e command',
+      );
+    }
+    if (action === 'load') {
       const remoteSessionId = rest[0];
       if (remoteSessionId === undefined || remoteSessionId.length === 0) {
-        throw new RemoteDevUsageError(`session ${action} requires a sessionId`);
+        throw new RemoteDevUsageError('session load requires a sessionId');
       }
-      requireNoExtra(rest.slice(1), `session ${action}`);
-      return {
-        kind: action === 'cancel' ? 'session.cancel' : 'session.load',
-        remoteSessionId,
-      };
+      requireNoExtra(rest.slice(1), 'session load');
+      return { kind: 'session.load', remoteSessionId };
     }
     throw new RemoteDevUsageError(`Unknown session command: ${action ?? '(missing)'}`);
   }

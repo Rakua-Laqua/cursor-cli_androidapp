@@ -91,11 +91,36 @@ test('parseRemoteDevArgv maps workspace select and session send', () => {
   assert.deepEqual(fromEnv.allowedRoots, roots);
 });
 
+test('one-shot session cancel is a usage error', async () => {
+  const cap = captureIo();
+  const code = await runRemoteDev(
+    [
+      ...mockFlags(),
+      '--state-dir',
+      makeDir('remote-dev-state-'),
+      '--allowed-root',
+      makeDir('remote-dev-root-'),
+      'session',
+      'cancel',
+      'sess-1',
+    ],
+    cap.io,
+    {},
+  );
+  assert.equal(code, 2);
+  assert.match(cap.err(), /one-shot session cancel is not supported/);
+  assert.doesNotMatch(cap.err(), /Unknown command/);
+});
+
 test('parseRemoteDevArgv rejects unknown commands and option mismatches', () => {
   assert.throws(() => parseRemoteDevArgv(['nope']), RemoteDevUsageError);
   assert.throws(() => parseRemoteDevArgv(['--acp-arg', 'x', 'workspace', 'list']), /--acp-command/);
   assert.throws(() => parseRemoteDevArgv(['--title', 'x', 'workspace', 'list']), /session create/);
   assert.throws(() => parseRemoteDevArgv(['--workspace', '/tmp/p', 'workspace', 'list']), /e2e/);
+  assert.throws(
+    () => parseRemoteDevArgv(['session', 'cancel', 'sess-1']),
+    /one-shot session cancel is not supported/,
+  );
 });
 
 test('one-shot commands require state-dir and allowed-root', async () => {
@@ -120,11 +145,11 @@ test('local e2e harness streams, cancels, restarts, loads, and continues', async
   const output = cap.text();
   assert.match(output, /workspace selected /);
   assert.match(output, /session created /);
-  assert.match(output, /streamed echo:e2e-stream/);
+  assert.match(output, /streamed E2ESTR_/);
   assert.match(output, /^cancelled$/m);
   assert.match(output, /^daemon restarted$/m);
   assert.match(output, /session loaded /);
-  assert.match(output, /continued echo:e2e-continue/);
+  assert.match(output, /continued E2ECON_/);
   assert.match(output, /^e2e ok /m);
 });
 
@@ -182,7 +207,7 @@ test('remote-dev CLI process completes the e2e loop against mock ACP', () => {
     encoding: 'utf8',
   });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /streamed echo:e2e-stream/);
-  assert.match(result.stdout, /continued echo:e2e-continue/);
+  assert.match(result.stdout, /streamed E2ESTR_/);
+  assert.match(result.stdout, /continued E2ECON_/);
   assert.match(result.stdout, /^e2e ok /m);
 });
