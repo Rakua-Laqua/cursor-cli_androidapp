@@ -1,6 +1,6 @@
 {
   "name": "@cursor-remote/relay",
-  "version": "0.3.1",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -9,6 +9,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@cursor-remote/protocol": "0.3.1"
+    "@cursor-remote/protocol": "1.0.0"
   }
 }

@@ -1,6 +1,4 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, statSync } from 'node:fs';
-import { resolve } from 'node:path';
 
 import type {
   AgentTerminalPayload,
@@ -12,6 +10,7 @@ import type {
 } from '@cursor-remote/protocol';
 
 import type { AcpNotification, AcpProcess } from '../acp/process.js';
+import type { WorkspaceManager } from '../workspace/workspace-manager.js';
 import {
   mapAcpSessionUpdate,
   readAcpUpdateBody,
@@ -19,7 +18,7 @@ import {
 } from './map-session-update.js';
 
 export interface CreateSessionInput {
-  readonly workspacePath: string;
+  readonly workspaceId: string;
   readonly initialPrompt: string;
   readonly title: string | null;
 }
@@ -27,6 +26,7 @@ export interface CreateSessionInput {
 interface TrackedSession {
   readonly remoteSessionId: string;
   readonly cursorSessionId: string;
+  readonly workspaceId: string;
   readonly workspacePath: string;
   title: string;
   status: SessionStatus;
@@ -36,7 +36,7 @@ interface TrackedSession {
 
 const CLIENT_INFO = {
   name: 'cursor-remote-daemon',
-  version: '0.3.1',
+  version: '1.0.0',
 } as const;
 
 const TERMINAL_SESSION_STATUSES: ReadonlySet<SessionStatus> = new Set([
@@ -53,7 +53,10 @@ export class AcpSessionAdapter {
   private readonly remoteIdByCursorId = new Map<string, string>();
   private readonly listeners = new Set<(event: KnownRemoteEvent) => void>();
 
-  constructor(private readonly acp: AcpProcess) {
+  constructor(
+    private readonly acp: AcpProcess,
+    private readonly workspaces: WorkspaceManager,
+  ) {
     this.acp.onNotification((notification) => this.handleNotification(notification));
     this.acp.onExit((info) => {
       if (info.expected) {
@@ -75,11 +78,11 @@ export class AcpSessionAdapter {
   }
 
   async create(input: CreateSessionInput): Promise<SessionPayload> {
-    const workspacePath = resolveWorkspacePath(input.workspacePath);
+    const workspace = this.workspaces.require(input.workspaceId);
     await this.ensureHandshake();
     const createdAt = nowIso();
     const result = await this.acp.request('session/new', {
-      cwd: workspacePath,
+      cwd: workspace.path,
       mcpServers: [],
     });
     const cursorSessionId = readRequiredString(result, 'sessionId', 'session/new');
@@ -87,13 +90,15 @@ export class AcpSessionAdapter {
     const session: TrackedSession = {
       remoteSessionId: randomUUID(),
       cursorSessionId,
-      workspacePath,
+      workspaceId: workspace.workspaceId,
+      workspacePath: workspace.path,
       title,
       status: 'idle',
       createdAt,
       updatedAt: createdAt,
     };
     this.track(session);
+    this.workspaces.markUsed(workspace.workspaceId);
     this.emitSession('session.created', session);
     if (input.initialPrompt.length > 0) {
       await this.runPrompt(session, input.initialPrompt);
@@ -112,6 +117,7 @@ export class AcpSessionAdapter {
     });
     session.status = 'idle';
     session.updatedAt = nowIso();
+    this.workspaces.markUsed(session.workspaceId);
     this.emitSession('session.loaded', session);
     this.emitStatus(session, 'idle');
     return toPayload(session);
@@ -131,7 +137,7 @@ export class AcpSessionAdapter {
     switch (command.type) {
       case 'session.create':
         return this.create({
-          workspacePath: readCommandString(command.payload, 'workspaceId'),
+          workspaceId: readCommandString(command.payload, 'workspaceId'),
           initialPrompt: readCommandString(command.payload, 'initialPrompt'),
           title: readCommandNullableString(command.payload, 'title'),
         });
@@ -147,7 +153,7 @@ export class AcpSessionAdapter {
         await this.cancel(readCommandSessionId(command.sessionId));
         return undefined;
       default:
-        throw new Error(`Unsupported command type in TASK-102: ${command.type}`);
+        throw new Error(`Unsupported command type: ${command.type}`);
     }
   }
 
@@ -185,6 +191,8 @@ export class AcpSessionAdapter {
     assertPromptNotInProgress(session);
     session.status = 'running';
     session.updatedAt = nowIso();
+    this.workspaces.markUsed(session.workspaceId);
+    this.workspaces.adjustActiveSessionCount(session.workspaceId, 1);
     this.emitStatus(session, 'running');
     this.emit(session.remoteSessionId, 'assistant.status', { status: 'running' });
 
@@ -215,9 +223,13 @@ export class AcpSessionAdapter {
     if (TERMINAL_SESSION_STATUSES.has(session.status)) {
       return;
     }
+    const wasRunning = session.status === 'running';
     session.status = status;
     session.updatedAt = nowIso();
     this.emitStatus(session, status);
+    if (wasRunning) {
+      this.workspaces.adjustActiveSessionCount(session.workspaceId, -1);
+    }
     const payload: AgentTerminalPayload = { reason };
     this.emit(session.remoteSessionId, type, payload);
   }
@@ -282,20 +294,12 @@ function toPayload(session: TrackedSession): SessionPayload {
   return {
     remoteSessionId: session.remoteSessionId,
     cursorSessionId: session.cursorSessionId,
-    workspaceId: session.workspacePath,
+    workspaceId: session.workspaceId,
     title: session.title,
     status: session.status,
     createdAt: session.createdAt,
     updatedAt: session.updatedAt,
   };
-}
-
-function resolveWorkspacePath(workspacePath: string): string {
-  const resolved = resolve(workspacePath);
-  if (!existsSync(resolved) || !statSync(resolved).isDirectory()) {
-    throw new Error(`Workspace path is not a directory: ${resolved}`);
-  }
-  return resolved;
 }
 
 function nowIso(): string {

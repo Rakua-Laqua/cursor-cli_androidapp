@@ -1,6 +1,13 @@
+import type {
+  RemoteCommand,
+  SessionPayload,
+  WorkspaceUpdatedPayload,
+} from '@cursor-remote/protocol';
+
 import { AcpProcess, type AcpProcessLogger, type AcpProcessOptions } from './acp/process.js';
 import { resolveAcpCommand } from './acp/resolve-command.js';
 import { AcpSessionAdapter } from './session/session-adapter.js';
+import { WorkspaceManager, type WorkspaceManagerOptions } from './workspace/workspace-manager.js';
 
 export interface DaemonAcpOptions {
   readonly command?: string;
@@ -15,12 +22,14 @@ export interface DaemonAcpOptions {
 export interface DaemonStartOptions {
   readonly acp?: DaemonAcpOptions;
   readonly logger?: AcpProcessLogger;
+  readonly workspaces?: WorkspaceManagerOptions;
 }
 
 export class Daemon {
   private constructor(
     private readonly acpProcess: AcpProcess,
     private readonly sessionAdapter: AcpSessionAdapter,
+    private readonly workspaceManager: WorkspaceManager,
   ) {}
 
   static async start(options: DaemonStartOptions = {}): Promise<Daemon> {
@@ -45,7 +54,14 @@ export class Daemon {
         : {}),
     });
 
-    return new Daemon(acpProcess, new AcpSessionAdapter(acpProcess));
+    const workspaceManager = new WorkspaceManager({
+      allowedRoots: options.workspaces?.allowedRoots ?? [],
+    });
+    return new Daemon(
+      acpProcess,
+      new AcpSessionAdapter(acpProcess, workspaceManager),
+      workspaceManager,
+    );
   }
 
   get acp(): AcpProcess {
@@ -54,6 +70,19 @@ export class Daemon {
 
   get sessions(): AcpSessionAdapter {
     return this.sessionAdapter;
+  }
+
+  get workspaces(): WorkspaceManager {
+    return this.workspaceManager;
+  }
+
+  async handleCommand(
+    command: RemoteCommand,
+  ): Promise<SessionPayload | WorkspaceUpdatedPayload | WorkspaceUpdatedPayload[] | undefined> {
+    if (command.type === 'workspace.list' || command.type === 'workspace.register') {
+      return this.workspaceManager.handleCommand(command);
+    }
+    return this.sessionAdapter.handleCommand(command);
   }
 
   async stop(): Promise<void> {

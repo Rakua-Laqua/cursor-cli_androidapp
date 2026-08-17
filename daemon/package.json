@@ -1,6 +1,6 @@
 {
   "name": "@cursor-remote/daemon",
-  "version": "0.3.1",
+  "version": "1.0.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -10,6 +10,6 @@
     "test": "npm run build && node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@cursor-remote/protocol": "0.3.1"
+    "@cursor-remote/protocol": "1.0.0"
   }
 }

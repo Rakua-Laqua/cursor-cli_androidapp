@@ -1,5 +1,28 @@
 # CHANGELOG
 
+## [1.0.0] - 2026-08-17
+
+### 変更
+
+- `session.create` の `workspaceId` は、実在するディレクトリへのパスではなく、先に `workspace.register` した Workspace の ID になった。`CreateSessionInput` の `workspacePath` は `workspaceId` に置き換わり、Session の `workspaceId` も登録 ID を返す。パスを直接渡していた呼び出しは、登録して得た ID を使う必要がある。未知の ID は `WorkspaceNotFoundError` になる。
+
+### 追加
+
+- Local Daemon に Workspace Manager を追加した。`Daemon.start` の `workspaces.allowedRoots` 配下のディレクトリだけを `workspace.register` でき、`daemon.workspaces` および `daemon.handleCommand` から `workspace.register` / `workspace.list` を使える。`allowedRoots` を渡さない場合は空で、登録はすべて拒否される。
+- `workspace.list` / `workspace.register` は `name`・`path`・`gitBranch`・`modified`・`activeSessionCount`・`lastUsedAt` を返し、登録時に `workspace.updated` を発行する。同一 canonical path の再登録は既存の `workspaceId` を返す。Git リポジトリでなければ `gitBranch` は null、`modified` は false。`session.create` / `load` / `send` で `lastUsedAt` を更新し、prompt 実行中は `activeSessionCount` を 1 にする。登録内容はプロセス内メモリのみで、ディスク永続化は TASK-104。Relay と Android の実データフローはまだ有効ではない。
+
+### セキュリティ
+
+- 登録パスは symlink を解決した canonical path がいずれかの `allowedRoots` 配下にあるときだけ許可する。許可ルート外への `..` 脱出、symlink で許可ルート外へ出るパス、ディレクトリでないパスは拒否する。
+
+### ドキュメント
+
+- `daemon/README.md` の Phase 境界を、TASK-103（Workspace 登録と `allowedRoots` 結界）まで実装済み、ディスク永続化は TASK-104 と明記する内容へ更新した。
+
+### テスト
+
+- `allowedRoots` 配下の許可、ルート外への脱出、symlink 脱出、`workspace.register` / `workspace.list`、登録済み ID による `session.create`、`lastUsedAt` / `activeSessionCount` を検証するテストを追加した。
+
 ## [0.3.1] - 2026-08-17
 
 ### 修正

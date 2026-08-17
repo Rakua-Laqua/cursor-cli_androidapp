@@ -18,18 +18,34 @@ function mockLaunch() {
   };
 }
 
-async function withDaemon(fn) {
+async function withDaemon(fn, acpExtra = {}) {
   const daemon = await Daemon.start({
     acp: {
       ...mockLaunch(),
       shutdownTimeoutMs: 1000,
+      ...acpExtra,
     },
+    workspaces: { allowedRoots: [os.tmpdir()] },
   });
   try {
     await fn(daemon);
   } finally {
     await daemon.stop();
   }
+}
+
+function registerWorkspace(daemon, workspacePath) {
+  return daemon.workspaces.register(workspacePath);
+}
+
+async function createIdleSession(daemon, workspacePath, title = null) {
+  const registered = registerWorkspace(daemon, workspacePath);
+  const created = await daemon.sessions.create({
+    workspaceId: registered.workspaceId,
+    initialPrompt: '',
+    title,
+  });
+  return { registered, created };
 }
 
 function makeWorkspace() {
@@ -71,16 +87,16 @@ function countStatus(events, status) {
   ).length;
 }
 
-test('session.create rejects a workspace path that is not a directory', async () => {
+test('session.create rejects an unknown workspaceId', async () => {
   await withDaemon(async (daemon) => {
     await assert.rejects(
       () =>
         daemon.sessions.create({
-          workspacePath: fixture,
+          workspaceId: 'missing',
           initialPrompt: '',
           title: null,
         }),
-      /not a directory/,
+      /Unknown workspace/,
     );
   });
 });
@@ -89,15 +105,11 @@ test('local client can create, stream, end, load, and continue a session', async
   const workspacePath = makeWorkspace();
   await withDaemon(async (daemon) => {
     const events = collectEvents(daemon);
-    const created = await daemon.sessions.create({
-      workspacePath,
-      initialPrompt: '',
-      title: 'probe',
-    });
+    const { registered, created } = await createIdleSession(daemon, workspacePath, 'probe');
 
     assert.equal(created.status, 'idle');
     assert.equal(created.title, 'probe');
-    assert.equal(created.workspaceId, path.resolve(workspacePath));
+    assert.equal(created.workspaceId, registered.workspaceId);
     assert.ok(created.remoteSessionId);
     assert.ok(created.cursorSessionId);
     assert.ok(events.some((event) => event.type === 'session.created'));
@@ -131,11 +143,7 @@ test('session.cancel interrupts a delayed prompt', async () => {
   const workspacePath = makeWorkspace();
   await withDaemon(async (daemon) => {
     const events = collectEvents(daemon);
-    const created = await daemon.sessions.create({
-      workspacePath,
-      initialPrompt: '',
-      title: null,
-    });
+    const { created } = await createIdleSession(daemon, workspacePath);
     assert.equal(created.title, 'Session');
 
     const sending = daemon.sessions.send(created.remoteSessionId, 'DELAY');
@@ -157,6 +165,7 @@ test('handleCommand covers create, send, cancel, and load', async () => {
   const workspacePath = makeWorkspace();
   await withDaemon(async (daemon) => {
     const events = collectEvents(daemon);
+    const registered = registerWorkspace(daemon, workspacePath);
     const created = await daemon.sessions.handleCommand(
       parseRemoteCommand(
         serializeCommand({
@@ -165,7 +174,7 @@ test('handleCommand covers create, send, cancel, and load', async () => {
           timestamp: new Date().toISOString(),
           type: 'session.create',
           payload: {
-            workspaceId: workspacePath,
+            workspaceId: registered.workspaceId,
             initialPrompt: 'from-command',
             title: null,
           },
@@ -231,11 +240,7 @@ test('ACP crash during a prompt emits exactly one agent.failed', async () => {
   const workspacePath = makeWorkspace();
   await withDaemon(async (daemon) => {
     const events = collectEvents(daemon);
-    const created = await daemon.sessions.create({
-      workspacePath,
-      initialPrompt: '',
-      title: null,
-    });
+    const { created } = await createIdleSession(daemon, workspacePath);
 
     const sending = daemon.sessions.send(created.remoteSessionId, 'DELAY');
     await waitUntil(() =>
@@ -257,9 +262,18 @@ test('ACP crash during a prompt emits exactly one agent.failed', async () => {
 test('concurrent session.create shares a single handshake', async () => {
   const workspacePath = makeWorkspace();
   await withDaemon(async (daemon) => {
+    const registered = registerWorkspace(daemon, workspacePath);
     const [first, second] = await Promise.all([
-      daemon.sessions.create({ workspacePath, initialPrompt: '', title: 'a' }),
-      daemon.sessions.create({ workspacePath, initialPrompt: '', title: 'b' }),
+      daemon.sessions.create({
+        workspaceId: registered.workspaceId,
+        initialPrompt: '',
+        title: 'a',
+      }),
+      daemon.sessions.create({
+        workspaceId: registered.workspaceId,
+        initialPrompt: '',
+        title: 'b',
+      }),
     ]);
     assert.notEqual(first.remoteSessionId, second.remoteSessionId);
     assert.notEqual(first.cursorSessionId, second.cursorSessionId);
@@ -281,19 +295,21 @@ test('failed handshake can be retried', async () => {
         MOCK_ACP_FAIL_INITIALIZE: '1',
       },
     },
+    workspaces: { allowedRoots: [os.tmpdir()] },
   });
   try {
+    const registered = registerWorkspace(daemon, workspacePath);
     await assert.rejects(
       () =>
         daemon.sessions.create({
-          workspacePath,
+          workspaceId: registered.workspaceId,
           initialPrompt: '',
           title: null,
         }),
       /initialize failed/,
     );
     const created = await daemon.sessions.create({
-      workspacePath,
+      workspaceId: registered.workspaceId,
       initialPrompt: '',
       title: null,
     });
@@ -310,11 +326,7 @@ test('send and load are rejected while a prompt is in progress', async () => {
   const workspacePath = makeWorkspace();
   await withDaemon(async (daemon) => {
     const events = collectEvents(daemon);
-    const created = await daemon.sessions.create({
-      workspacePath,
-      initialPrompt: '',
-      title: null,
-    });
+    const { created } = await createIdleSession(daemon, workspacePath);
 
     const sending = daemon.sessions.send(created.remoteSessionId, 'DELAY');
     await waitUntil(() =>

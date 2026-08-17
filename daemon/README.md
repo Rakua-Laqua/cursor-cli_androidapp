@@ -2,6 +2,6 @@
 
 PC 上で Cursor CLI / ACP と通信し、Workspace 境界・Session・Permission・File access の最終 authority になる Local Daemon です。
 
-Phase 1 の TASK-102 では、Remote Protocol の `session.create` / `session.load` / `session.send` / `session.cancel` を Cursor ACP の `session/new` / `session/load` / `session/prompt` / `session/cancel`（notification）へ接続します。`initialize` → `authenticate` は Session Adapter が初回利用時に遅延実行し、同時呼び出しは1回の handshake にまとめます。`Daemon.start` ではプロセス起動だけを行います。同一 Session で prompt 実行中の `send` / `load` は拒否します。
+Phase 1 の TASK-103 では Workspace を第一級オブジェクトとして扱い、`allowedRoots` 配下だけを `workspace.register` できます。canonical path と symlink 解決後に許可ルート外へ出るパスは拒否します。`session.create` の `workspaceId` は登録済み Workspace の ID です。
 
-Workspace の allowedRoots / symlink 検査は TASK-103 の Scope です。TASK-102 では `session.create` の `workspaceId` を、実在するディレクトリへのパスとして扱います。
+`workspace.list` / `workspace.register` は Git branch・未コミット変更・稼働中 Session 数・最終利用日時を返します。Workspace / Session のディスク永続化は TASK-104 の Scope です。

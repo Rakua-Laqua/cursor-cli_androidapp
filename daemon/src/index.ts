@@ -4,6 +4,21 @@ export { Daemon, type DaemonAcpOptions, type DaemonStartOptions } from './daemon
 export { AcpSessionAdapter, type CreateSessionInput } from './session/session-adapter.js';
 export { mapAcpSessionUpdate, type MappedSessionEvent } from './session/map-session-update.js';
 export {
+  WorkspaceManager,
+  WorkspaceNotFoundError,
+  type WorkspaceManagerOptions,
+} from './workspace/workspace-manager.js';
+export {
+  WorkspaceNotAllowedError,
+  WorkspacePathError,
+  assertDirectoryAllowed,
+  canonicalizeExistingPath,
+  canonicalizeRoot,
+  findAllowedRoot,
+  isPathInsideRoot,
+} from './workspace/path-guard.js';
+export { readGitInfo, findGitRoot } from './workspace/git-info.js';
+export {
   AcpJsonRpcError,
   AcpProcess,
   AcpProcessExitedError,
