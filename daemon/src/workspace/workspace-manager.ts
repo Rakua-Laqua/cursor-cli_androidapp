@@ -11,7 +11,7 @@ import type {
 import { readGitInfo } from './git-info.js';
 import {
   assertDirectoryAllowed,
-  canonicalizeRoot,
+  freezeAllowedRoot,
   WorkspaceNotAllowedError,
   WorkspacePathError,
 } from './path-guard.js';
@@ -44,7 +44,7 @@ export class WorkspaceManager {
   private readonly listeners = new Set<(event: KnownRemoteEvent) => void>();
 
   constructor(options: WorkspaceManagerOptions) {
-    this.allowedRoots = options.allowedRoots.map((root) => canonicalizeRoot(root));
+    this.allowedRoots = options.allowedRoots.map((root) => freezeAllowedRoot(root));
   }
 
   onEvent(listener: (event: KnownRemoteEvent) => void): () => void {
@@ -93,6 +93,11 @@ export class WorkspaceManager {
       throw new WorkspaceNotFoundError(`Unknown workspace: ${workspaceId}`);
     }
     return workspace;
+  }
+
+  resolveTrustedPath(workspaceId: string): string {
+    const workspace = this.require(workspaceId);
+    return assertDirectoryAllowed(workspace.path, this.allowedRoots);
   }
 
   markUsed(workspaceId: string): WorkspaceUpdatedPayload {

@@ -10,6 +10,7 @@ import { parseRemoteCommand, serializeCommand } from '@cursor-remote/protocol';
 
 import {
   Daemon,
+  WorkspaceManager,
   WorkspaceNotAllowedError,
   WorkspaceNotFoundError,
   WorkspacePathError,
@@ -35,6 +36,20 @@ function gitOk() {
 function git(cwd, args) {
   const result = spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true });
   assert.equal(result.status, 0, result.stderr);
+}
+
+function tryDirLink(target, linkPath) {
+  try {
+    fs.symlinkSync(target, linkPath, 'dir');
+    return true;
+  } catch {
+    try {
+      fs.symlinkSync(target, linkPath, 'junction');
+      return true;
+    } catch {
+      return false;
+    }
+  }
 }
 
 async function withDaemon(allowedRoots, fn) {
@@ -188,5 +203,84 @@ test('session.create requires a registered workspaceId and updates last-used met
     await daemon.sessions.cancel(created.remoteSessionId);
     await sending;
     assert.equal(daemon.workspaces.list()[0].activeSessionCount, 0);
+  });
+});
+
+test('WorkspaceManager rejects a missing or non-directory allowedRoot', () => {
+  const parent = makeRoot();
+  const missing = path.join(parent, 'missing');
+  const filePath = path.join(parent, 'notes.txt');
+  fs.writeFileSync(filePath, 'x');
+  assert.throws(() => new WorkspaceManager({ allowedRoots: [missing] }), WorkspacePathError);
+  assert.throws(() => new WorkspaceManager({ allowedRoots: [filePath] }), WorkspacePathError);
+});
+
+test('register rejects after allowedRoot is replaced with a symlink to outside', async (t) => {
+  const parent = makeRoot();
+  const allowedRoot = path.join(parent, 'allowed');
+  const outside = path.join(parent, 'outside');
+  fs.mkdirSync(allowedRoot);
+  fs.mkdirSync(outside);
+  await withDaemon([allowedRoot], async (daemon) => {
+    fs.renameSync(allowedRoot, path.join(parent, 'allowed-old'));
+    if (!tryDirLink(outside, allowedRoot)) {
+      t.skip('directory symlink/junction is not available');
+      return;
+    }
+    const sneaky = path.join(allowedRoot, 'project');
+    fs.mkdirSync(sneaky);
+    assert.throws(() => daemon.workspaces.register(sneaky), WorkspaceNotAllowedError);
+  });
+});
+
+test('session.create rejects if a registered workspace is replaced with an outside symlink', async (t) => {
+  const parent = makeRoot();
+  const allowedRoot = path.join(parent, 'allowed');
+  const outside = path.join(parent, 'outside');
+  const project = path.join(allowedRoot, 'project');
+  fs.mkdirSync(project, { recursive: true });
+  fs.mkdirSync(outside);
+  await withDaemon([allowedRoot], async (daemon) => {
+    const registered = daemon.workspaces.register(project);
+    fs.renameSync(project, path.join(allowedRoot, 'project-old'));
+    if (!tryDirLink(outside, project)) {
+      t.skip('directory symlink/junction is not available');
+      return;
+    }
+    await assert.rejects(
+      () =>
+        daemon.sessions.create({
+          workspaceId: registered.workspaceId,
+          initialPrompt: '',
+          title: null,
+        }),
+      WorkspaceNotAllowedError,
+    );
+  });
+});
+
+test('session.load rejects if a registered workspace is replaced with an outside symlink', async (t) => {
+  const parent = makeRoot();
+  const allowedRoot = path.join(parent, 'allowed');
+  const outside = path.join(parent, 'outside');
+  const project = path.join(allowedRoot, 'project');
+  fs.mkdirSync(project, { recursive: true });
+  fs.mkdirSync(outside);
+  await withDaemon([allowedRoot], async (daemon) => {
+    const registered = daemon.workspaces.register(project);
+    const created = await daemon.sessions.create({
+      workspaceId: registered.workspaceId,
+      initialPrompt: '',
+      title: null,
+    });
+    fs.renameSync(project, path.join(allowedRoot, 'project-old'));
+    if (!tryDirLink(outside, project)) {
+      t.skip('directory symlink/junction is not available');
+      return;
+    }
+    await assert.rejects(
+      () => daemon.sessions.load(created.remoteSessionId),
+      WorkspaceNotAllowedError,
+    );
   });
 });

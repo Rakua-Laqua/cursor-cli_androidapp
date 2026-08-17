@@ -36,7 +36,7 @@ interface TrackedSession {
 
 const CLIENT_INFO = {
   name: 'cursor-remote-daemon',
-  version: '1.0.0',
+  version: '1.0.1',
 } as const;
 
 const TERMINAL_SESSION_STATUSES: ReadonlySet<SessionStatus> = new Set([
@@ -80,9 +80,10 @@ export class AcpSessionAdapter {
   async create(input: CreateSessionInput): Promise<SessionPayload> {
     const workspace = this.workspaces.require(input.workspaceId);
     await this.ensureHandshake();
+    const cwd = this.workspaces.resolveTrustedPath(workspace.workspaceId);
     const createdAt = nowIso();
     const result = await this.acp.request('session/new', {
-      cwd: workspace.path,
+      cwd,
       mcpServers: [],
     });
     const cursorSessionId = readRequiredString(result, 'sessionId', 'session/new');
@@ -91,7 +92,7 @@ export class AcpSessionAdapter {
       remoteSessionId: randomUUID(),
       cursorSessionId,
       workspaceId: workspace.workspaceId,
-      workspacePath: workspace.path,
+      workspacePath: cwd,
       title,
       status: 'idle',
       createdAt,
@@ -110,9 +111,10 @@ export class AcpSessionAdapter {
     await this.ensureHandshake();
     const session = this.requireSession(remoteSessionId);
     assertPromptNotInProgress(session);
+    const cwd = this.workspaces.resolveTrustedPath(session.workspaceId);
     await this.acp.request('session/load', {
       sessionId: session.cursorSessionId,
-      cwd: session.workspacePath,
+      cwd,
       mcpServers: [],
     });
     session.status = 'idle';

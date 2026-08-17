@@ -23,6 +23,28 @@ export function canonicalizeRoot(root: string): string {
   return resolved;
 }
 
+export function freezeAllowedRoot(root: string): string {
+  const resolved = resolve(root);
+  if (!existsSync(resolved)) {
+    throw new WorkspacePathError(`allowedRoot does not exist: ${resolved}`);
+  }
+
+  let canonical: string;
+  try {
+    canonical = realpathSync(resolved);
+  } catch (error) {
+    throw new WorkspacePathError(
+      error instanceof Error ? error.message : `Cannot resolve allowedRoot: ${resolved}`,
+    );
+  }
+
+  if (!statSync(canonical).isDirectory()) {
+    throw new WorkspacePathError(`allowedRoot is not a directory: ${canonical}`);
+  }
+
+  return canonical;
+}
+
 export function canonicalizeExistingPath(input: string): string {
   const resolved = resolve(input);
   if (!existsSync(resolved)) {
@@ -42,8 +64,8 @@ export function findAllowedRoot(
 ): string | undefined {
   const canonical = existsSync(candidate) ? realpathSync(candidate) : resolve(candidate);
   for (const root of allowedRoots) {
-    if (isPathInsideRoot(canonical, canonicalizeRoot(root))) {
-      return canonicalizeRoot(root);
+    if (isPathInsideRoot(canonical, root)) {
+      return root;
     }
   }
   return undefined;

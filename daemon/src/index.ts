@@ -15,6 +15,7 @@ export {
   canonicalizeExistingPath,
   canonicalizeRoot,
   findAllowedRoot,
+  freezeAllowedRoot,
   isPathInsideRoot,
 } from './workspace/path-guard.js';
 export { readGitInfo, findGitRoot } from './workspace/git-info.js';

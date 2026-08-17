@@ -1,5 +1,20 @@
 # CHANGELOG
 
+## [1.0.1] - 2026-08-17
+
+### セキュリティ
+
+- `allowedRoots` は Daemon 起動時に実在するディレクトリとして canonicalize し、その値を結界として固定する。判定時に許可ルート自身を再 realpath しないため、起動後に許可ルートを許可外への symlink に差し替えても信頼しない。存在しないパスやディレクトリでない `allowedRoots` は起動時に `WorkspacePathError` になる。
+- `session.create` / `session.load` の直前に、登録済み path を realpath して固定済み `allowedRoots` に再照合する。登録後に Workspace を許可ルート外への symlink に差し替えた場合は `WorkspaceNotAllowedError` で拒否する。
+
+### ドキュメント
+
+- `daemon/README.md` に、`allowedRoots` の起動時固定と、`session.create` / `session.load` 直前の再照合を追記した。
+
+### テスト
+
+- 起動後の許可ルート差し替え、存在しない / ディレクトリでない `allowedRoots` の拒否、登録済み Workspace 差し替え後の `session.create` / `session.load` 拒否を検証するテストを追加した。
+
 ## [1.0.0] - 2026-08-17
 
 ### 変更
