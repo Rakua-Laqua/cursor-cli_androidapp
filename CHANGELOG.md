@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## [1.0.2] - 2026-08-17
+
+### セキュリティ
+
+- `session.send` の直前にも、登録済み path を realpath して固定済み `allowedRoots` に再照合する。登録後に Workspace を許可ルート外への symlink に差し替えた場合は `WorkspaceNotAllowedError` で拒否し、Session の `status` は `running` にしない。
+- `workspace.list` と Git metadata の更新でも、登録済み path を realpath して固定済み `allowedRoots` に再照合する。差し替えられた Workspace があると `workspace.list` 全体が `WorkspaceNotAllowedError` で拒否される。
+
+### テスト
+
+- 登録済み Workspace 差し替え後の `workspace.list` 拒否と、`session.send` 拒否（照合失敗後も Session が `running` にならないこと）を検証するテストを追加した。
+
 ## [1.0.1] - 2026-08-17
 
 ### セキュリティ

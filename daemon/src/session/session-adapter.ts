@@ -36,7 +36,7 @@ interface TrackedSession {
 
 const CLIENT_INFO = {
   name: 'cursor-remote-daemon',
-  version: '1.0.1',
+  version: '1.0.2',
 } as const;
 
 const TERMINAL_SESSION_STATUSES: ReadonlySet<SessionStatus> = new Set([
@@ -191,9 +191,9 @@ export class AcpSessionAdapter {
 
   private async runPrompt(session: TrackedSession, text: string): Promise<void> {
     assertPromptNotInProgress(session);
+    this.workspaces.markUsed(session.workspaceId);
     session.status = 'running';
     session.updatedAt = nowIso();
-    this.workspaces.markUsed(session.workspaceId);
     this.workspaces.adjustActiveSessionCount(session.workspaceId, 1);
     this.emitStatus(session, 'running');
     this.emit(session.remoteSessionId, 'assistant.status', { status: 'running' });

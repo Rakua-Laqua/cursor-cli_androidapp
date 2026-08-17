@@ -127,7 +127,8 @@ export class WorkspaceManager {
   }
 
   private refreshGit(workspace: TrackedWorkspace): void {
-    const git = readGitInfo(workspace.path);
+    const trustedPath = this.resolveTrustedPath(workspace.workspaceId);
+    const git = readGitInfo(trustedPath);
     workspace.gitBranch = git.gitBranch;
     workspace.modified = git.modified;
   }

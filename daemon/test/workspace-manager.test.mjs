@@ -284,3 +284,51 @@ test('session.load rejects if a registered workspace is replaced with an outside
     );
   });
 });
+
+test('workspace.list rejects if a registered workspace is replaced with an outside symlink', async (t) => {
+  const parent = makeRoot();
+  const allowedRoot = path.join(parent, 'allowed');
+  const outside = path.join(parent, 'outside');
+  const project = path.join(allowedRoot, 'project');
+  fs.mkdirSync(project, { recursive: true });
+  fs.mkdirSync(outside);
+  await withDaemon([allowedRoot], async (daemon) => {
+    daemon.workspaces.register(project);
+    fs.renameSync(project, path.join(allowedRoot, 'project-old'));
+    if (!tryDirLink(outside, project)) {
+      t.skip('directory symlink/junction is not available');
+      return;
+    }
+    assert.throws(() => daemon.workspaces.list(), WorkspaceNotAllowedError);
+  });
+});
+
+test('session.send rejects if a registered workspace is replaced with an outside symlink', async (t) => {
+  const parent = makeRoot();
+  const allowedRoot = path.join(parent, 'allowed');
+  const outside = path.join(parent, 'outside');
+  const project = path.join(allowedRoot, 'project');
+  fs.mkdirSync(project, { recursive: true });
+  fs.mkdirSync(outside);
+  await withDaemon([allowedRoot], async (daemon) => {
+    const registered = daemon.workspaces.register(project);
+    const created = await daemon.sessions.create({
+      workspaceId: registered.workspaceId,
+      initialPrompt: '',
+      title: null,
+    });
+    fs.renameSync(project, path.join(allowedRoot, 'project-old'));
+    if (!tryDirLink(outside, project)) {
+      t.skip('directory symlink/junction is not available');
+      return;
+    }
+    await assert.rejects(
+      () => daemon.sessions.send(created.remoteSessionId, 'hello'),
+      WorkspaceNotAllowedError,
+    );
+    await assert.rejects(
+      () => daemon.sessions.send(created.remoteSessionId, 'hello'),
+      WorkspaceNotAllowedError,
+    );
+  });
+});
