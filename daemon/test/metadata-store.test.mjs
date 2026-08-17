@@ -1,0 +1,229 @@
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import test from 'node:test';
+import { fileURLToPath } from 'node:url';
+
+import { parseRemoteCommand, serializeCommand } from '@cursor-remote/protocol';
+
+import { Daemon, METADATA_FILE_NAME, WorkspaceNotFoundError } from '../dist/index.js';
+
+const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'mock-acp.mjs');
+
+function mockLaunch() {
+  return {
+    command: process.execPath,
+    args: [fixture],
+  };
+}
+
+function makeRoot() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'ws-store-'));
+}
+
+function tryDirLink(target, linkPath) {
+  try {
+    fs.symlinkSync(target, linkPath, 'dir');
+    return true;
+  } catch {
+    try {
+      fs.symlinkSync(target, linkPath, 'junction');
+      return true;
+    } catch {
+      return false;
+    }
+  }
+}
+
+async function startDaemon(stateDir, allowedRoots) {
+  return Daemon.start({
+    acp: {
+      ...mockLaunch(),
+      shutdownTimeoutMs: 1000,
+    },
+    workspaces: { allowedRoots },
+    stateDir,
+  });
+}
+
+test('daemon restart restores session list, load, and a follow-up prompt', async () => {
+  const stateDir = makeRoot();
+  const allowedRoot = makeRoot();
+  const project = path.join(allowedRoot, 'app');
+  fs.mkdirSync(project);
+
+  const first = await startDaemon(stateDir, [allowedRoot]);
+  let remoteSessionId;
+  let workspaceId;
+  let cursorSessionId;
+  try {
+    const registered = first.workspaces.register(project);
+    workspaceId = registered.workspaceId;
+    const created = await first.sessions.create({
+      workspaceId,
+      initialPrompt: 'hello',
+      title: 'probe',
+    });
+    remoteSessionId = created.remoteSessionId;
+    cursorSessionId = created.cursorSessionId;
+    assert.equal(created.status, 'completed');
+  } finally {
+    await first.stop();
+  }
+
+  const second = await startDaemon(stateDir, [allowedRoot]);
+  try {
+    const workspaces = second.workspaces.list();
+    assert.equal(workspaces.length, 1);
+    assert.equal(workspaces[0].workspaceId, workspaceId);
+
+    const listed = second.sessions.list(workspaceId);
+    assert.equal(listed.length, 1);
+    assert.equal(listed[0].remoteSessionId, remoteSessionId);
+    assert.equal(listed[0].cursorSessionId, cursorSessionId);
+    assert.equal(listed[0].title, 'probe');
+    assert.equal(listed[0].workspaceId, workspaceId);
+
+    const loaded = await second.sessions.load(remoteSessionId);
+    assert.equal(loaded.remoteSessionId, remoteSessionId);
+    assert.equal(loaded.status, 'idle');
+
+    await second.sessions.send(remoteSessionId, 'follow-up');
+    const afterSend = second.sessions.list(workspaceId);
+    assert.equal(afterSend[0].status, 'completed');
+  } finally {
+    await second.stop();
+  }
+});
+
+test('session.list filters by workspaceId', async () => {
+  const stateDir = makeRoot();
+  const allowedRoot = makeRoot();
+  const firstProject = path.join(allowedRoot, 'one');
+  const secondProject = path.join(allowedRoot, 'two');
+  fs.mkdirSync(firstProject);
+  fs.mkdirSync(secondProject);
+
+  const daemon = await startDaemon(stateDir, [allowedRoot]);
+  try {
+    const firstWorkspace = daemon.workspaces.register(firstProject);
+    const secondWorkspace = daemon.workspaces.register(secondProject);
+    const firstSession = await daemon.sessions.create({
+      workspaceId: firstWorkspace.workspaceId,
+      initialPrompt: '',
+      title: 'one',
+    });
+    await daemon.sessions.create({
+      workspaceId: secondWorkspace.workspaceId,
+      initialPrompt: '',
+      title: 'two',
+    });
+
+    const listed = daemon.sessions.list(firstWorkspace.workspaceId);
+    assert.equal(listed.length, 1);
+    assert.equal(listed[0].remoteSessionId, firstSession.remoteSessionId);
+
+    const viaCommand = await daemon.handleCommand(
+      parseRemoteCommand(
+        serializeCommand({
+          requestId: 'req-list',
+          sessionId: null,
+          timestamp: new Date().toISOString(),
+          type: 'session.list',
+          payload: { workspaceId: firstWorkspace.workspaceId },
+        }),
+      ),
+    );
+    assert.ok(Array.isArray(viaCommand));
+    assert.equal(viaCommand.length, 1);
+    assert.equal(viaCommand[0].remoteSessionId, firstSession.remoteSessionId);
+
+    assert.throws(() => daemon.sessions.list('missing'), WorkspaceNotFoundError);
+  } finally {
+    await daemon.stop();
+  }
+});
+
+test('running sessions are restored as disconnected', async () => {
+  const stateDir = makeRoot();
+  const allowedRoot = makeRoot();
+  const project = path.join(allowedRoot, 'app');
+  fs.mkdirSync(project);
+  const workspaceId = 'ws-running';
+  const remoteSessionId = 'remote-running';
+  fs.writeFileSync(
+    path.join(stateDir, METADATA_FILE_NAME),
+    JSON.stringify({
+      version: 1,
+      workspaces: [
+        {
+          workspaceId,
+          path: fs.realpathSync(project),
+          name: 'app',
+          lastUsedAt: null,
+        },
+      ],
+      sessions: [
+        {
+          remoteSessionId,
+          cursorSessionId: 'cursor-running',
+          workspaceId,
+          title: 'live',
+          status: 'running',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+          lastEventId: 'evt-1',
+          selectedModelId: null,
+        },
+      ],
+    }),
+  );
+
+  const daemon = await startDaemon(stateDir, [allowedRoot]);
+  try {
+    const listed = daemon.sessions.list(workspaceId);
+    assert.equal(listed.length, 1);
+    assert.equal(listed[0].status, 'disconnected');
+  } finally {
+    await daemon.stop();
+  }
+});
+
+test('workspace replaced with an outside symlink is not restored', async (t) => {
+  const stateDir = makeRoot();
+  const parent = makeRoot();
+  const allowedRoot = path.join(parent, 'allowed');
+  const outside = path.join(parent, 'outside');
+  const project = path.join(allowedRoot, 'project');
+  fs.mkdirSync(project, { recursive: true });
+  fs.mkdirSync(outside);
+
+  const first = await startDaemon(stateDir, [allowedRoot]);
+  let workspaceId;
+  try {
+    const registered = first.workspaces.register(project);
+    workspaceId = registered.workspaceId;
+    await first.sessions.create({
+      workspaceId,
+      initialPrompt: '',
+      title: 'escape',
+    });
+  } finally {
+    await first.stop();
+  }
+
+  fs.renameSync(project, path.join(allowedRoot, 'project-old'));
+  if (!tryDirLink(outside, project)) {
+    t.skip('directory symlink/junction is not available');
+    return;
+  }
+
+  const second = await startDaemon(stateDir, [allowedRoot]);
+  try {
+    assert.equal(second.workspaces.list().length, 0);
+    assert.throws(() => second.sessions.list(workspaceId), WorkspaceNotFoundError);
+  } finally {
+    await second.stop();
+  }
+});

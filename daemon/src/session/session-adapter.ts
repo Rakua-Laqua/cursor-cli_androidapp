@@ -10,6 +10,7 @@ import type {
 } from '@cursor-remote/protocol';
 
 import type { AcpNotification, AcpProcess } from '../acp/process.js';
+import type { MetadataStore, PersistedSession } from '../store/metadata-store.js';
 import type { WorkspaceManager } from '../workspace/workspace-manager.js';
 import {
   mapAcpSessionUpdate,
@@ -27,16 +28,18 @@ interface TrackedSession {
   readonly remoteSessionId: string;
   readonly cursorSessionId: string;
   readonly workspaceId: string;
-  readonly workspacePath: string;
+  workspacePath: string;
   title: string;
   status: SessionStatus;
   readonly createdAt: string;
   updatedAt: string;
+  lastEventId: string | null;
+  selectedModelId: string | null;
 }
 
 const CLIENT_INFO = {
   name: 'cursor-remote-daemon',
-  version: '1.0.2',
+  version: '1.1.0',
 } as const;
 
 const TERMINAL_SESSION_STATUSES: ReadonlySet<SessionStatus> = new Set([
@@ -56,6 +59,7 @@ export class AcpSessionAdapter {
   constructor(
     private readonly acp: AcpProcess,
     private readonly workspaces: WorkspaceManager,
+    private readonly store?: MetadataStore,
   ) {
     this.acp.onNotification((notification) => this.handleNotification(notification));
     this.acp.onExit((info) => {
@@ -68,6 +72,7 @@ export class AcpSessionAdapter {
         }
       }
     });
+    this.hydrate();
   }
 
   onEvent(listener: (event: KnownRemoteEvent) => void): () => void {
@@ -97,10 +102,13 @@ export class AcpSessionAdapter {
       status: 'idle',
       createdAt,
       updatedAt: createdAt,
+      lastEventId: null,
+      selectedModelId: null,
     };
     this.track(session);
     this.workspaces.markUsed(workspace.workspaceId);
     this.emitSession('session.created', session);
+    this.persist();
     if (input.initialPrompt.length > 0) {
       await this.runPrompt(session, input.initialPrompt);
     }
@@ -119,10 +127,19 @@ export class AcpSessionAdapter {
     });
     session.status = 'idle';
     session.updatedAt = nowIso();
+    session.workspacePath = cwd;
     this.workspaces.markUsed(session.workspaceId);
     this.emitSession('session.loaded', session);
     this.emitStatus(session, 'idle');
+    this.persist();
     return toPayload(session);
+  }
+
+  list(workspaceId: string): SessionPayload[] {
+    this.workspaces.require(workspaceId);
+    return [...this.sessions.values()]
+      .filter((session) => session.workspaceId === workspaceId)
+      .map((session) => toPayload(session));
   }
 
   async send(remoteSessionId: string, text: string): Promise<void> {
@@ -135,7 +152,9 @@ export class AcpSessionAdapter {
     this.acp.notify('session/cancel', { sessionId: session.cursorSessionId });
   }
 
-  async handleCommand(command: RemoteCommand): Promise<SessionPayload | undefined> {
+  async handleCommand(
+    command: RemoteCommand,
+  ): Promise<SessionPayload | SessionPayload[] | undefined> {
     switch (command.type) {
       case 'session.create':
         return this.create({
@@ -145,6 +164,8 @@ export class AcpSessionAdapter {
         });
       case 'session.load':
         return this.load(readCommandString(command.payload, 'remoteSessionId'));
+      case 'session.list':
+        return this.list(readCommandString(command.payload, 'workspaceId'));
       case 'session.send':
         await this.send(
           readCommandSessionId(command.sessionId),
@@ -234,6 +255,7 @@ export class AcpSessionAdapter {
     }
     const payload: AgentTerminalPayload = { reason };
     this.emit(session.remoteSessionId, type, payload);
+    this.persist();
   }
 
   private handleNotification(notification: AcpNotification): void {
@@ -279,16 +301,68 @@ export class AcpSessionAdapter {
     type: KnownRemoteEvent['type'],
     payload: KnownRemoteEvent['payload'],
   ): void {
+    const eventId = randomUUID();
     const event = {
-      eventId: randomUUID(),
+      eventId,
       sessionId,
       timestamp: nowIso(),
       type,
       payload,
     } as KnownRemoteEvent;
+    const session = this.sessions.get(sessionId);
+    if (session) {
+      session.lastEventId = eventId;
+      this.persist();
+    }
     for (const listener of this.listeners) {
       listener(event);
     }
+  }
+
+  private hydrate(): void {
+    if (this.store === undefined) {
+      return;
+    }
+    for (const record of this.store.getSessions()) {
+      try {
+        this.restoreOne(record);
+      } catch {
+        // Leave unrestorable records on disk; do not expose them as live sessions.
+      }
+    }
+  }
+
+  private restoreOne(record: PersistedSession): void {
+    const cwd = this.workspaces.resolveTrustedPath(record.workspaceId);
+    const session: TrackedSession = {
+      remoteSessionId: record.remoteSessionId,
+      cursorSessionId: record.cursorSessionId,
+      workspaceId: record.workspaceId,
+      workspacePath: cwd,
+      title: record.title,
+      status: statusAfterRestore(record.status),
+      createdAt: record.createdAt,
+      updatedAt: record.updatedAt,
+      lastEventId: record.lastEventId,
+      selectedModelId: record.selectedModelId,
+    };
+    this.track(session);
+  }
+
+  private persist(): void {
+    this.store?.writeSessions(
+      [...this.sessions.values()].map((session) => ({
+        remoteSessionId: session.remoteSessionId,
+        cursorSessionId: session.cursorSessionId,
+        workspaceId: session.workspaceId,
+        title: session.title,
+        status: session.status,
+        createdAt: session.createdAt,
+        updatedAt: session.updatedAt,
+        lastEventId: session.lastEventId,
+        selectedModelId: session.selectedModelId,
+      })),
+    );
   }
 }
 
@@ -306,6 +380,13 @@ function toPayload(session: TrackedSession): SessionPayload {
 
 function nowIso(): string {
   return new Date().toISOString();
+}
+
+function statusAfterRestore(status: SessionStatus): SessionStatus {
+  if (status === 'running' || status === 'waiting_approval' || status === 'waiting_user') {
+    return 'disconnected';
+  }
+  return status;
 }
 
 function readRequiredString(value: unknown, key: string, source: string): string {

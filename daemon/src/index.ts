@@ -18,6 +18,14 @@ export {
   freezeAllowedRoot,
   isPathInsideRoot,
 } from './workspace/path-guard.js';
+export {
+  METADATA_FILE_NAME,
+  METADATA_STORE_VERSION,
+  MetadataStore,
+  MetadataStoreError,
+  type PersistedSession,
+  type PersistedWorkspace,
+} from './store/metadata-store.js';
 export { readGitInfo, findGitRoot } from './workspace/git-info.js';
 export {
   AcpJsonRpcError,

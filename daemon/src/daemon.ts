@@ -1,3 +1,5 @@
+import { join } from 'node:path';
+
 import type {
   RemoteCommand,
   SessionPayload,
@@ -7,6 +9,7 @@ import type {
 import { AcpProcess, type AcpProcessLogger, type AcpProcessOptions } from './acp/process.js';
 import { resolveAcpCommand } from './acp/resolve-command.js';
 import { AcpSessionAdapter } from './session/session-adapter.js';
+import { METADATA_FILE_NAME, MetadataStore } from './store/metadata-store.js';
 import { WorkspaceManager, type WorkspaceManagerOptions } from './workspace/workspace-manager.js';
 
 export interface DaemonAcpOptions {
@@ -23,6 +26,7 @@ export interface DaemonStartOptions {
   readonly acp?: DaemonAcpOptions;
   readonly logger?: AcpProcessLogger;
   readonly workspaces?: WorkspaceManagerOptions;
+  readonly stateDir?: string;
 }
 
 export class Daemon {
@@ -54,12 +58,19 @@ export class Daemon {
         : {}),
     });
 
-    const workspaceManager = new WorkspaceManager({
-      allowedRoots: options.workspaces?.allowedRoots ?? [],
-    });
+    const store =
+      options.stateDir === undefined
+        ? undefined
+        : new MetadataStore(join(options.stateDir, METADATA_FILE_NAME));
+    const workspaceManager = new WorkspaceManager(
+      {
+        allowedRoots: options.workspaces?.allowedRoots ?? [],
+      },
+      store,
+    );
     return new Daemon(
       acpProcess,
-      new AcpSessionAdapter(acpProcess, workspaceManager),
+      new AcpSessionAdapter(acpProcess, workspaceManager, store),
       workspaceManager,
     );
   }
@@ -78,7 +89,13 @@ export class Daemon {
 
   async handleCommand(
     command: RemoteCommand,
-  ): Promise<SessionPayload | WorkspaceUpdatedPayload | WorkspaceUpdatedPayload[] | undefined> {
+  ): Promise<
+    | SessionPayload
+    | SessionPayload[]
+    | WorkspaceUpdatedPayload
+    | WorkspaceUpdatedPayload[]
+    | undefined
+  > {
     if (command.type === 'workspace.list' || command.type === 'workspace.register') {
       return this.workspaceManager.handleCommand(command);
     }

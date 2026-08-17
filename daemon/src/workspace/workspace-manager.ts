@@ -8,6 +8,7 @@ import type {
   WorkspaceUpdatedPayload,
 } from '@cursor-remote/protocol';
 
+import type { MetadataStore, PersistedWorkspace } from '../store/metadata-store.js';
 import { readGitInfo } from './git-info.js';
 import {
   assertDirectoryAllowed,
@@ -43,8 +44,12 @@ export class WorkspaceManager {
   private readonly idByPath = new Map<string, string>();
   private readonly listeners = new Set<(event: KnownRemoteEvent) => void>();
 
-  constructor(options: WorkspaceManagerOptions) {
+  constructor(
+    options: WorkspaceManagerOptions,
+    private readonly store?: MetadataStore,
+  ) {
     this.allowedRoots = options.allowedRoots.map((root) => freezeAllowedRoot(root));
+    this.hydrate();
   }
 
   onEvent(listener: (event: KnownRemoteEvent) => void): () => void {
@@ -62,6 +67,7 @@ export class WorkspaceManager {
       this.refreshGit(existing);
       const payload = toPayload(existing);
       this.emit(payload);
+      this.persist();
       return payload;
     }
 
@@ -77,6 +83,7 @@ export class WorkspaceManager {
     this.idByPath.set(canonical, workspace.workspaceId);
     const payload = toPayload(workspace);
     this.emit(payload);
+    this.persist();
     return payload;
   }
 
@@ -106,6 +113,7 @@ export class WorkspaceManager {
     this.refreshGit(workspace);
     const payload = toPayload(workspace);
     this.emit(payload);
+    this.persist();
     return payload;
   }
 
@@ -131,6 +139,44 @@ export class WorkspaceManager {
     const git = readGitInfo(trustedPath);
     workspace.gitBranch = git.gitBranch;
     workspace.modified = git.modified;
+  }
+
+  private hydrate(): void {
+    if (this.store === undefined) {
+      return;
+    }
+    for (const record of this.store.getWorkspaces()) {
+      try {
+        this.restoreOne(record);
+      } catch {
+        // Leave unrestorable records on disk; do not expose them as live workspaces.
+      }
+    }
+  }
+
+  private restoreOne(record: PersistedWorkspace): void {
+    const canonical = assertDirectoryAllowed(record.path, this.allowedRoots);
+    const workspace: TrackedWorkspace = {
+      workspaceId: record.workspaceId,
+      path: canonical,
+      name: record.name,
+      ...readGitInfo(canonical),
+      activeSessionCount: 0,
+      lastUsedAt: record.lastUsedAt,
+    };
+    this.workspaces.set(workspace.workspaceId, workspace);
+    this.idByPath.set(canonical, workspace.workspaceId);
+  }
+
+  private persist(): void {
+    this.store?.writeWorkspaces(
+      [...this.workspaces.values()].map((workspace) => ({
+        workspaceId: workspace.workspaceId,
+        path: workspace.path,
+        name: workspace.name,
+        lastUsedAt: workspace.lastUsedAt,
+      })),
+    );
   }
 
   private emit(payload: WorkspaceUpdatedPayload): void {

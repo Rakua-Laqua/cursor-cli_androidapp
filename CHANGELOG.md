@@ -1,5 +1,24 @@
 # CHANGELOG
 
+## [1.1.0] - 2026-08-17
+
+### 追加
+
+- `Daemon.start({ stateDir })` を渡すと、Workspace と Session の metadata を `stateDir/metadata.json` に保存する。再起動後に Workspace 一覧と Session 一覧を復元し、`session.load` したうえで `session.send` を続けられる。会話本文は Cursor 側 Session を正本とし、ファイルには含めない。`stateDir` を渡さない場合は従来どおりプロセス内メモリのみ。Relay と Android の実データフロー、および Local E2E ハーネスは TASK-105。保存形式は `version` 1 で、非対応の version や壊れた JSON は起動時に `MetadataStoreError` になる。個別の不正レコードは読み飛ばす。
+- `session.list` を実装した。`workspaceId` で絞り込み、`daemon.sessions.list` と `handleCommand` から使える。未知の `workspaceId` は `WorkspaceNotFoundError` になる。
+
+### 変更
+
+- 復元時、保存されていた `running` / `waiting_approval` / `waiting_user` は `disconnected` にする。
+
+### セキュリティ
+
+- 復元時に許可ルート外へ出る Workspace / Session はメモリへ載せない。ディスク上の記録は残る。
+
+### テスト
+
+- 再起動後の list / load / send、`session.list` の `workspaceId` 絞り込み、`running` の `disconnected` 復元、許可ルート外差し替え後の非復元を検証するテストを追加した。
+
 ## [1.0.2] - 2026-08-17
 
 ### セキュリティ

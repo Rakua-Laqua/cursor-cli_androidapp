@@ -209,7 +209,7 @@ rl.on('line', (line) => {
 
   if (method === 'session/load') {
     const sessionId = params?.sessionId;
-    if (typeof sessionId !== 'string' || !sessions.has(sessionId)) {
+    if (typeof sessionId !== 'string' || sessionId.length === 0) {
       send({
         jsonrpc: '2.0',
         id,
@@ -217,6 +217,7 @@ rl.on('line', (line) => {
       });
       return;
     }
+    sessions.add(sessionId);
     send({ jsonrpc: '2.0', id, result: sessionMeta() });
     return;
   }
