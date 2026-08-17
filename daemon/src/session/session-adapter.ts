@@ -39,7 +39,7 @@ interface TrackedSession {
 
 const CLIENT_INFO = {
   name: 'cursor-remote-daemon',
-  version: '1.1.0',
+  version: '1.1.1',
 } as const;
 
 const TERMINAL_SESSION_STATUSES: ReadonlySet<SessionStatus> = new Set([
@@ -103,7 +103,7 @@ export class AcpSessionAdapter {
       createdAt,
       updatedAt: createdAt,
       lastEventId: null,
-      selectedModelId: null,
+      selectedModelId: readCurrentModelId(result),
     };
     this.track(session);
     this.workspaces.markUsed(workspace.workspaceId);
@@ -120,7 +120,7 @@ export class AcpSessionAdapter {
     const session = this.requireSession(remoteSessionId);
     assertPromptNotInProgress(session);
     const cwd = this.workspaces.resolveTrustedPath(session.workspaceId);
-    await this.acp.request('session/load', {
+    const loadResult = await this.acp.request('session/load', {
       sessionId: session.cursorSessionId,
       cwd,
       mcpServers: [],
@@ -128,6 +128,7 @@ export class AcpSessionAdapter {
     session.status = 'idle';
     session.updatedAt = nowIso();
     session.workspacePath = cwd;
+    session.selectedModelId = readCurrentModelId(loadResult);
     this.workspaces.markUsed(session.workspaceId);
     this.emitSession('session.loaded', session);
     this.emitStatus(session, 'idle');
@@ -394,6 +395,14 @@ function readRequiredString(value: unknown, key: string, source: string): string
     throw new Error(`${source} did not return ${key}`);
   }
   return value[key];
+}
+
+function readCurrentModelId(value: unknown): string | null {
+  if (!isRecord(value) || !isRecord(value.models)) {
+    return null;
+  }
+  const modelId = value.models.currentModelId;
+  return typeof modelId === 'string' && modelId.length > 0 ? modelId : null;
 }
 
 function readStopReason(value: unknown): string {

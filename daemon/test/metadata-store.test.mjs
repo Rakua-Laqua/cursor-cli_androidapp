@@ -7,9 +7,20 @@ import { fileURLToPath } from 'node:url';
 
 import { parseRemoteCommand, serializeCommand } from '@cursor-remote/protocol';
 
-import { Daemon, METADATA_FILE_NAME, WorkspaceNotFoundError } from '../dist/index.js';
+import {
+  Daemon,
+  METADATA_FILE_NAME,
+  MetadataStoreError,
+  WorkspaceNotFoundError,
+  WorkspacePathError,
+} from '../dist/index.js';
 
 const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'mock-acp.mjs');
+const spawnMarker = path.join(
+  path.dirname(fileURLToPath(import.meta.url)),
+  'fixtures',
+  'spawn-marker.mjs',
+);
 
 function mockLaunch() {
   return {
@@ -36,11 +47,16 @@ function tryDirLink(target, linkPath) {
   }
 }
 
-async function startDaemon(stateDir, allowedRoots) {
+function readMetadata(stateDir) {
+  return JSON.parse(fs.readFileSync(path.join(stateDir, METADATA_FILE_NAME), 'utf8'));
+}
+
+async function startDaemon(stateDir, allowedRoots, acpExtra = {}) {
   return Daemon.start({
     acp: {
       ...mockLaunch(),
       shutdownTimeoutMs: 1000,
+      ...acpExtra,
     },
     workspaces: { allowedRoots },
     stateDir,
@@ -68,6 +84,7 @@ test('daemon restart restores session list, load, and a follow-up prompt', async
     remoteSessionId = created.remoteSessionId;
     cursorSessionId = created.cursorSessionId;
     assert.equal(created.status, 'completed');
+    assert.equal(readMetadata(stateDir).sessions[0].selectedModelId, 'mock-model');
   } finally {
     await first.stop();
   }
@@ -84,10 +101,12 @@ test('daemon restart restores session list, load, and a follow-up prompt', async
     assert.equal(listed[0].cursorSessionId, cursorSessionId);
     assert.equal(listed[0].title, 'probe');
     assert.equal(listed[0].workspaceId, workspaceId);
+    assert.equal(readMetadata(stateDir).sessions[0].selectedModelId, 'mock-model');
 
     const loaded = await second.sessions.load(remoteSessionId);
     assert.equal(loaded.remoteSessionId, remoteSessionId);
     assert.equal(loaded.status, 'idle');
+    assert.equal(readMetadata(stateDir).sessions[0].selectedModelId, 'mock-model');
 
     await second.sessions.send(remoteSessionId, 'follow-up');
     const afterSend = second.sessions.list(workspaceId);
@@ -226,4 +245,93 @@ test('workspace replaced with an outside symlink is not restored', async (t) => 
   } finally {
     await second.stop();
   }
+});
+
+test('re-registering a repaired workspace reuses the stored id instead of duplicating', async (t) => {
+  const stateDir = makeRoot();
+  const parent = makeRoot();
+  const allowedRoot = path.join(parent, 'allowed');
+  const outside = path.join(parent, 'outside');
+  const project = path.join(allowedRoot, 'project');
+  fs.mkdirSync(project, { recursive: true });
+  fs.mkdirSync(outside);
+
+  const first = await startDaemon(stateDir, [allowedRoot]);
+  let workspaceId;
+  try {
+    workspaceId = first.workspaces.register(project).workspaceId;
+  } finally {
+    await first.stop();
+  }
+
+  const projectOld = path.join(allowedRoot, 'project-old');
+  fs.renameSync(project, projectOld);
+  if (!tryDirLink(outside, project)) {
+    t.skip('directory symlink/junction is not available');
+    return;
+  }
+
+  const second = await startDaemon(stateDir, [allowedRoot]);
+  try {
+    assert.equal(second.workspaces.list().length, 0);
+    fs.unlinkSync(project);
+    fs.renameSync(projectOld, project);
+    const registered = second.workspaces.register(project);
+    assert.equal(registered.workspaceId, workspaceId);
+    assert.equal(second.workspaces.list().length, 1);
+  } finally {
+    await second.stop();
+  }
+
+  const third = await startDaemon(stateDir, [allowedRoot]);
+  try {
+    const listed = third.workspaces.list();
+    assert.equal(listed.length, 1);
+    assert.equal(listed[0].workspaceId, workspaceId);
+    assert.equal(readMetadata(stateDir).workspaces.length, 1);
+  } finally {
+    await third.stop();
+  }
+});
+
+test('invalid metadata does not spawn an ACP child', async () => {
+  const stateDir = makeRoot();
+  const allowedRoot = makeRoot();
+  const markerPath = path.join(stateDir, 'spawned');
+  fs.writeFileSync(path.join(stateDir, METADATA_FILE_NAME), '{not-json');
+  await assert.rejects(
+    () =>
+      Daemon.start({
+        acp: {
+          command: process.execPath,
+          args: [spawnMarker, markerPath, fixture],
+          shutdownTimeoutMs: 1000,
+        },
+        workspaces: { allowedRoots: [allowedRoot] },
+        stateDir,
+      }),
+    MetadataStoreError,
+  );
+  assert.equal(fs.existsSync(markerPath), false);
+});
+
+test('invalid allowedRoot does not spawn an ACP child', async () => {
+  const stateDir = makeRoot();
+  const allowedRoot = makeRoot();
+  const filePath = path.join(allowedRoot, 'notes.txt');
+  fs.writeFileSync(filePath, 'x');
+  const markerPath = path.join(stateDir, 'spawned');
+  await assert.rejects(
+    () =>
+      Daemon.start({
+        acp: {
+          command: process.execPath,
+          args: [spawnMarker, markerPath, fixture],
+          shutdownTimeoutMs: 1000,
+        },
+        workspaces: { allowedRoots: [filePath] },
+      }),
+    WorkspacePathError,
+  );
+  assert.equal(fs.existsSync(markerPath), false);
 });

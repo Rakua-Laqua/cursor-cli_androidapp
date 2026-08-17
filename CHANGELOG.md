@@ -1,5 +1,24 @@
 # CHANGELOG
 
+## [1.1.1] - 2026-08-17
+
+### 変更
+
+- `selectedModelId` は `session/new` / `session/load` 応答の `models.currentModelId` から `metadata.json` に保存する。無い、または空文字のときは `null`。モデル ID はハードコードしない。`SessionPayload` と `session.list` には含まれず、`model.select` は未実装。
+
+### 修正
+
+- 許可ルート外になって復元されなかった Workspace を修復して再 `workspace.register` すると、保存済み `workspaceId` を再利用し、`metadata.json` に同一 path の重複を残さない。
+- 壊れた `metadata.json` や不正な `allowedRoots` では ACP 子プロセスを起動せず、それぞれ `MetadataStoreError` / `WorkspacePathError` になる。
+
+### ドキュメント
+
+- `docs/acp_capability_report.md` に、ACP プロセス再起動後の `session/load` と follow-up `session/prompt` の実測を追記した。load 後に前回の `agent_message_chunk` が再送される場合がある。会話履歴 replay の完全性は未確認。
+
+### テスト
+
+- `selectedModelId` の保存、修復後の `workspaceId` 再利用、壊れた metadata / 不正な `allowedRoots` で ACP を起動しないことを検証するテストを追加した。
+
 ## [1.1.0] - 2026-08-17
 
 ### 追加

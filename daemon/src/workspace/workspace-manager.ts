@@ -71,6 +71,17 @@ export class WorkspaceManager {
       return payload;
     }
 
+    const stored = this.findStoredRecordForPath(canonical);
+    if (stored !== undefined) {
+      this.restoreOne({ ...stored, path: canonical });
+      const restored = this.require(stored.workspaceId);
+      this.refreshGit(restored);
+      const payload = toPayload(restored);
+      this.emit(payload);
+      this.persist();
+      return payload;
+    }
+
     const workspace: TrackedWorkspace = {
       workspaceId: randomUUID(),
       path: canonical,
@@ -156,6 +167,10 @@ export class WorkspaceManager {
 
   private restoreOne(record: PersistedWorkspace): void {
     const canonical = assertDirectoryAllowed(record.path, this.allowedRoots);
+    const existingId = this.idByPath.get(canonical);
+    if (existingId !== undefined) {
+      return;
+    }
     const workspace: TrackedWorkspace = {
       workspaceId: record.workspaceId,
       path: canonical,
@@ -166,6 +181,25 @@ export class WorkspaceManager {
     };
     this.workspaces.set(workspace.workspaceId, workspace);
     this.idByPath.set(canonical, workspace.workspaceId);
+  }
+
+  private findStoredRecordForPath(canonical: string): PersistedWorkspace | undefined {
+    if (this.store === undefined) {
+      return undefined;
+    }
+    for (const record of this.store.getWorkspaces()) {
+      if (this.workspaces.has(record.workspaceId)) {
+        continue;
+      }
+      try {
+        if (assertDirectoryAllowed(record.path, this.allowedRoots) === canonical) {
+          return record;
+        }
+      } catch {
+        // Stored path is still outside the frozen allowedRoots.
+      }
+    }
+    return undefined;
   }
 
   private persist(): void {

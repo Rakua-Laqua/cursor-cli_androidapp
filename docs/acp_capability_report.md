@@ -50,7 +50,7 @@
 | initialize / handshake | 観測 | `protocolVersion: 1` を返した。`agentInfo` は initialize 応答に含まれなかった |
 | capabilities | 観測 | 下記 `agentCapabilities` |
 | session create | 観測 | `session/new` → UUID `sessionId` |
-| session load / resume | 観測 | `loadSession: true`。同一 `sessionId` で `session/load` が成功し、modes / models / configOptions を再掲した |
+| session load / resume | 観測 | `loadSession: true`。同一プロセス内の `session/load` に加え、ACP プロセス終了後に新プロセスで同じ `sessionId` を `session/load` し、follow-up prompt まで成功した |
 | prompt 送信 | 観測 | `session/prompt`。応答は `{ stopReason }` のみ。本文は `session/update` 側 |
 | streaming update | 観測 | `session/update` の chunk 通知 |
 | tool update | 観測 | `tool_call` / `tool_call_update` |
@@ -268,7 +268,7 @@ probe は `reject-once` を返した。その後も turn は継続し、別 tool
 4. 応答本文・思考・tool・slash 一覧は `session/update` から取る。`session/prompt` の result は `stopReason` だけを前提にする。
 5. cancel は notification。request として送らない。
 6. `usage_update`、構造化 context breakdown、`cursor/*` 拡張、audio prompt、`embeddedContext` は未観測または capability false。これらを前提にした UI / Protocol 埋め込みはしない。
-7. `session/load` と `session/list` は使ってよい。resume 後の履歴 replay の完全性は、同一プロセス内 load のみ確認した。プロセス再起動後の load は未実測。
+7. `session/load` と `session/list` は使ってよい。ACP プロセスを終了して新プロセスを handshake したあとでも、同じ `sessionId` で `session/load` し follow-up prompt まで通ることを確認した。load 後に前回の `agent_message_chunk` が再送される場合がある。会話履歴 replay の完全性（全メッセージ・tool の再現）は未確認。
 8. MCP `http` / `sse` capability は advertise された。実際の MCP 接続は未実測。
 
 ---
@@ -276,7 +276,6 @@ probe は `reject-once` を返した。その後も turn は継続し、別 tool
 ## 12. 未実測で残す項目
 
 - 未ログイン状態からの `authenticate`
-- ACP プロセス再起動後の `session/load`
 - image prompt（`promptCapabilities.image = true`）
 - audio prompt（capability は false）
 - slash command の実行
@@ -284,5 +283,38 @@ probe は `reject-once` を返した。その後も turn は継続し、別 tool
 - `usage_update` の有無（長時間 turn / 別モデルでも再確認する価値あり）
 - `cursor/*` 拡張の実着信
 - MCP server を `session/new.mcpServers` に渡した場合の挙動
+- プロセス再起動後 `session/load` における会話履歴 replay の完全性
 
 これらが必要になった時点で再 probe し、本レポートを更新してから実装する。
+
+---
+
+## 13. TASK-104 追実測: ACP プロセス再起動後の `session/load`
+
+- 実測日: 2026-08-17
+- 対象 CLI: `2026.08.11-e8db854`（TASK-100 と同じ version ディレクトリの `node.exe` + `index.js acp`）
+- 作業ディレクトリ: 空の一時 workspace（本リポジトリは cwd に使っていない）
+- clientInfo: `{ name: "task104-restart-load-probe", version: "1.1.0" }`
+- incoming `session/request_permission` には `reject-once` を返した
+
+手順:
+
+1. `initialize` → `authenticate({ methodId: "cursor_login" })` → `session/new`
+2. `session/prompt`（token `ACP_RESTART_LOAD_OK` を返すよう依頼）
+3. ACP プロセスを shutdown
+4. 新しい ACP プロセスを起動し、同じ handshake
+5. 同じ `sessionId` と `cwd` で `session/load`
+6. follow-up の `session/prompt`（token `ACP_RESTART_FOLLOWUP_OK`）
+
+結果:
+
+| 項目 | 結果 |
+| --- | --- |
+| 初回 `session/new` | 成功。`sessionId` は UUID |
+| 初回 `session/prompt` | `stopReason: end_turn`。本文は `session/update` の `agent_message_chunk` で `ACP_RESTART_LOAD_OK` |
+| プロセス再起動後の handshake | 成功 |
+| `session/load` | 成功。応答に `models.currentModelId` を含んだ。`sessionId` は応答に含まれなかった（TASK-100 と同じ） |
+| follow-up `session/prompt` | `stopReason: end_turn`。本文に `ACP_RESTART_FOLLOWUP_OK` |
+| 履歴 replay | load 後の `session/update` に、初回応答の `ACP_RESTART_LOAD_OK` も現れた。前回 chunk の再送があり得る。全履歴の完全再現は未確認 |
+
+この実行での `models.currentModelId` は `composer-2.5[fast=true]` だった。値はアカウントと CLI に依存する。実装はモデル ID をハードコードせず、`session/new` / `session/load` 応答の `models.currentModelId` を保存する。

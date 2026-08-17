@@ -41,6 +41,17 @@ export class Daemon {
       ? { command: options.acp.command, args: options.acp.args ?? [] }
       : resolveAcpCommand();
 
+    const store =
+      options.stateDir === undefined
+        ? undefined
+        : new MetadataStore(join(options.stateDir, METADATA_FILE_NAME));
+    const workspaceManager = new WorkspaceManager(
+      {
+        allowedRoots: options.workspaces?.allowedRoots ?? [],
+      },
+      store,
+    );
+
     const acpProcess = await AcpProcess.spawn({
       command: resolved.command,
       args: resolved.args,
@@ -58,21 +69,16 @@ export class Daemon {
         : {}),
     });
 
-    const store =
-      options.stateDir === undefined
-        ? undefined
-        : new MetadataStore(join(options.stateDir, METADATA_FILE_NAME));
-    const workspaceManager = new WorkspaceManager(
-      {
-        allowedRoots: options.workspaces?.allowedRoots ?? [],
-      },
-      store,
-    );
-    return new Daemon(
-      acpProcess,
-      new AcpSessionAdapter(acpProcess, workspaceManager, store),
-      workspaceManager,
-    );
+    try {
+      return new Daemon(
+        acpProcess,
+        new AcpSessionAdapter(acpProcess, workspaceManager, store),
+        workspaceManager,
+      );
+    } catch (error) {
+      await acpProcess.shutdown();
+      throw error;
+    }
   }
 
   get acp(): AcpProcess {

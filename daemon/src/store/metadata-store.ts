@@ -70,7 +70,10 @@ export class MetadataStore {
 
   writeWorkspaces(workspaces: readonly PersistedWorkspace[]): void {
     const currentIds = new Set(workspaces.map((workspace) => workspace.workspaceId));
-    const preserved = this.workspaces.filter((workspace) => !currentIds.has(workspace.workspaceId));
+    const currentPaths = new Set(workspaces.map((workspace) => workspace.path));
+    const preserved = this.workspaces.filter(
+      (workspace) => !currentIds.has(workspace.workspaceId) && !currentPaths.has(workspace.path),
+    );
     this.workspaces = [...workspaces, ...preserved];
     this.flush();
   }
