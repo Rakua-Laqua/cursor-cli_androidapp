@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 
 import { parseRemoteCommand, serializeCommand } from '@cursor-remote/protocol';
 
-import { Daemon } from '../dist/index.js';
+import { AcpProcessExitedError, Daemon } from '../dist/index.js';
 
 const fixture = path.join(path.dirname(fileURLToPath(import.meta.url)), 'fixtures', 'mock-acp.mjs');
 
@@ -59,6 +59,18 @@ function joinedAssistantText(events) {
     .join('');
 }
 
+const TERMINAL_EVENT_TYPES = new Set(['agent.completed', 'agent.failed', 'agent.interrupted']);
+
+function terminalEvents(events) {
+  return events.filter((event) => TERMINAL_EVENT_TYPES.has(event.type));
+}
+
+function countStatus(events, status) {
+  return events.filter(
+    (event) => event.type === 'session.status_changed' && event.payload.status === status,
+  ).length;
+}
+
 test('session.create rejects a workspace path that is not a directory', async () => {
   await withDaemon(async (daemon) => {
     await assert.rejects(
@@ -98,7 +110,8 @@ test('local client can create, stream, end, load, and continue a session', async
       true,
     );
     assert.equal(joinedAssistantText(events), 'echo:hello');
-    assert.ok(events.some((event) => event.type === 'agent.completed'));
+    assert.equal(terminalEvents(events).length, 1);
+    assert.equal(terminalEvents(events)[0].type, 'agent.completed');
     assert.ok(events.some((event) => event.type === 'assistant.status'));
 
     const loaded = await daemon.sessions.load(created.remoteSessionId);
@@ -110,6 +123,7 @@ test('local client can create, stream, end, load, and continue a session', async
     await daemon.sessions.send(created.remoteSessionId, 'follow-up');
     assert.match(joinedAssistantText(events), /echo:follow-up/);
     assert.equal(events.filter((event) => event.type === 'agent.completed').length, 2);
+    assert.equal(terminalEvents(events).length, 2);
   });
 });
 
@@ -134,10 +148,8 @@ test('session.cancel interrupts a delayed prompt', async () => {
     await sending;
 
     assert.ok(events.some((event) => event.type === 'agent.interrupted'));
-    assert.equal(
-      events.some((event) => event.type === 'agent.completed'),
-      false,
-    );
+    assert.equal(terminalEvents(events).length, 1);
+    assert.equal(terminalEvents(events)[0].type, 'agent.interrupted');
   });
 });
 
@@ -209,6 +221,117 @@ test('handleCommand covers create, send, cancel, and load', async () => {
       ),
     );
     await sending;
-    assert.ok(events.some((event) => event.type === 'agent.interrupted'));
+    assert.equal(terminalEvents(events).length, 2);
+    assert.equal(events.filter((event) => event.type === 'agent.completed').length, 1);
+    assert.equal(events.filter((event) => event.type === 'agent.interrupted').length, 1);
+  });
+});
+
+test('ACP crash during a prompt emits exactly one agent.failed', async () => {
+  const workspacePath = makeWorkspace();
+  await withDaemon(async (daemon) => {
+    const events = collectEvents(daemon);
+    const created = await daemon.sessions.create({
+      workspacePath,
+      initialPrompt: '',
+      title: null,
+    });
+
+    const sending = daemon.sessions.send(created.remoteSessionId, 'DELAY');
+    await waitUntil(() =>
+      events.some(
+        (event) => event.type === 'assistant.status' && event.payload.status === 'thinking',
+      ),
+    );
+    await daemon.acp.request('crash').catch(() => {});
+    await assert.rejects(sending, AcpProcessExitedError);
+
+    const failed = events.filter((event) => event.type === 'agent.failed');
+    assert.equal(failed.length, 1);
+    assert.equal(countStatus(events, 'failed'), 1);
+    assert.equal(terminalEvents(events).length, 1);
+    assert.match(failed[0].payload.reason ?? '', /ACP process exited|exited/);
+  });
+});
+
+test('concurrent session.create shares a single handshake', async () => {
+  const workspacePath = makeWorkspace();
+  await withDaemon(async (daemon) => {
+    const [first, second] = await Promise.all([
+      daemon.sessions.create({ workspacePath, initialPrompt: '', title: 'a' }),
+      daemon.sessions.create({ workspacePath, initialPrompt: '', title: 'b' }),
+    ]);
+    assert.notEqual(first.remoteSessionId, second.remoteSessionId);
+    assert.notEqual(first.cursorSessionId, second.cursorSessionId);
+
+    const stats = await daemon.acp.request('debug-stats');
+    assert.equal(stats.initializeCount, 1);
+    assert.equal(stats.authenticateCount, 1);
+  });
+});
+
+test('failed handshake can be retried', async () => {
+  const workspacePath = makeWorkspace();
+  const daemon = await Daemon.start({
+    acp: {
+      ...mockLaunch(),
+      shutdownTimeoutMs: 1000,
+      env: {
+        ...process.env,
+        MOCK_ACP_FAIL_INITIALIZE: '1',
+      },
+    },
+  });
+  try {
+    await assert.rejects(
+      () =>
+        daemon.sessions.create({
+          workspacePath,
+          initialPrompt: '',
+          title: null,
+        }),
+      /initialize failed/,
+    );
+    const created = await daemon.sessions.create({
+      workspacePath,
+      initialPrompt: '',
+      title: null,
+    });
+    assert.ok(created.remoteSessionId);
+    const stats = await daemon.acp.request('debug-stats');
+    assert.equal(stats.initializeCount, 2);
+    assert.equal(stats.authenticateCount, 1);
+  } finally {
+    await daemon.stop();
+  }
+});
+
+test('send and load are rejected while a prompt is in progress', async () => {
+  const workspacePath = makeWorkspace();
+  await withDaemon(async (daemon) => {
+    const events = collectEvents(daemon);
+    const created = await daemon.sessions.create({
+      workspacePath,
+      initialPrompt: '',
+      title: null,
+    });
+
+    const sending = daemon.sessions.send(created.remoteSessionId, 'DELAY');
+    await waitUntil(() =>
+      events.some(
+        (event) => event.type === 'assistant.status' && event.payload.status === 'thinking',
+      ),
+    );
+
+    await assert.rejects(
+      () => daemon.sessions.send(created.remoteSessionId, 'hello'),
+      /prompt in progress/,
+    );
+    await assert.rejects(() => daemon.sessions.load(created.remoteSessionId), /prompt in progress/);
+
+    await daemon.sessions.cancel(created.remoteSessionId);
+    await sending;
+    assert.equal(terminalEvents(events).length, 1);
+    assert.equal(terminalEvents(events)[0].type, 'agent.interrupted');
   });
 });

@@ -1,5 +1,21 @@
 # CHANGELOG
 
+## [0.3.1] - 2026-08-17
+
+### 修正
+
+- 同時の `session.create` / `session.load` が `initialize` と `authenticate` を1回の handshake にまとめるようにした。handshake が失敗した場合は、次の呼び出しで再試行できる。
+- 同一 Session で prompt 実行中（`running`）の `send` / `load` を拒否する。`session.cancel` は実行中でも送れる。
+- Session が `completed` / `failed` / `interrupted` / `disconnected` になったあと、終端 Event を重ねて出さない。prompt 中の ACP 異常終了は `agent.failed` を1回出す。
+
+### ドキュメント
+
+- `daemon/README.md` に、handshake の同時呼び出し集約と、prompt 実行中の `send` / `load` 拒否を追記した。
+
+### テスト
+
+- handshake の共有と失敗後の再試行、prompt 実行中の `send` / `load` 拒否、ACP クラッシュ時の `agent.failed` が1回であることを検証するテストを追加した。
+
 ## [0.3.0] - 2026-08-17
 
 ### 追加

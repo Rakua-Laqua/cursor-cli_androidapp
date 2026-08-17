@@ -103,6 +103,12 @@ const sessions = new Set();
 const pendingCancels = new Set();
 const delayWaiters = new Map();
 let sessionSeq = 0;
+let initializeCount = 0;
+let authenticateCount = 0;
+let initializeFailRemaining = Number.parseInt(process.env.MOCK_ACP_FAIL_INITIALIZE ?? '0', 10);
+if (!Number.isFinite(initializeFailRemaining) || initializeFailRemaining < 0) {
+  initializeFailRemaining = 0;
+}
 const ignoreStdin = process.env.MOCK_ACP_IGNORE_STDIN === '1';
 const ignoreSigterm = process.env.MOCK_ACP_IGNORE_SIGTERM === '1';
 
@@ -148,6 +154,16 @@ rl.on('line', (line) => {
   const { id, method, params } = message ?? {};
 
   if (method === 'initialize') {
+    initializeCount += 1;
+    if (initializeFailRemaining > 0) {
+      initializeFailRemaining -= 1;
+      send({
+        jsonrpc: '2.0',
+        id,
+        error: { code: -32000, message: 'initialize failed' },
+      });
+      return;
+    }
     send({
       jsonrpc: '2.0',
       id,
@@ -162,7 +178,17 @@ rl.on('line', (line) => {
   }
 
   if (method === 'authenticate') {
+    authenticateCount += 1;
     send({ jsonrpc: '2.0', id, result: {} });
+    return;
+  }
+
+  if (method === 'debug-stats') {
+    send({
+      jsonrpc: '2.0',
+      id,
+      result: { initializeCount, authenticateCount },
+    });
     return;
   }
 

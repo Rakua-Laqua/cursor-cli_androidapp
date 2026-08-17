@@ -36,11 +36,19 @@ interface TrackedSession {
 
 const CLIENT_INFO = {
   name: 'cursor-remote-daemon',
-  version: '0.3.0',
+  version: '0.3.1',
 } as const;
+
+const TERMINAL_SESSION_STATUSES: ReadonlySet<SessionStatus> = new Set([
+  'completed',
+  'failed',
+  'interrupted',
+  'disconnected',
+]);
 
 export class AcpSessionAdapter {
   private handshakeDone = false;
+  private handshakePromise: Promise<void> | undefined;
   private readonly sessions = new Map<string, TrackedSession>();
   private readonly remoteIdByCursorId = new Map<string, string>();
   private readonly listeners = new Set<(event: KnownRemoteEvent) => void>();
@@ -96,6 +104,7 @@ export class AcpSessionAdapter {
   async load(remoteSessionId: string): Promise<SessionPayload> {
     await this.ensureHandshake();
     const session = this.requireSession(remoteSessionId);
+    assertPromptNotInProgress(session);
     await this.acp.request('session/load', {
       sessionId: session.cursorSessionId,
       cwd: session.workspacePath,
@@ -146,6 +155,21 @@ export class AcpSessionAdapter {
     if (this.handshakeDone) {
       return;
     }
+    if (this.handshakePromise === undefined) {
+      this.handshakePromise = this.performHandshake().then(
+        () => {
+          this.handshakeDone = true;
+        },
+        (error: unknown) => {
+          this.handshakePromise = undefined;
+          throw error;
+        },
+      );
+    }
+    await this.handshakePromise;
+  }
+
+  private async performHandshake(): Promise<void> {
     await this.acp.request('initialize', {
       protocolVersion: 1,
       clientCapabilities: {
@@ -155,10 +179,10 @@ export class AcpSessionAdapter {
       clientInfo: CLIENT_INFO,
     });
     await this.acp.request('authenticate', { methodId: 'cursor_login' });
-    this.handshakeDone = true;
   }
 
   private async runPrompt(session: TrackedSession, text: string): Promise<void> {
+    assertPromptNotInProgress(session);
     session.status = 'running';
     session.updatedAt = nowIso();
     this.emitStatus(session, 'running');
@@ -188,7 +212,7 @@ export class AcpSessionAdapter {
     type: 'agent.completed' | 'agent.failed' | 'agent.interrupted',
     reason: string | null,
   ): void {
-    if (session.status === 'disconnected') {
+    if (TERMINAL_SESSION_STATUSES.has(session.status)) {
       return;
     }
     session.status = status;
@@ -309,6 +333,12 @@ function readCommandNullableString(payload: JsonObject, key: string): string | n
     throw new Error(`${key} must be a string or null`);
   }
   return value;
+}
+
+function assertPromptNotInProgress(session: TrackedSession): void {
+  if (session.status === 'running') {
+    throw new Error('Session already has a prompt in progress');
+  }
 }
 
 function readCommandSessionId(sessionId: string | null): string {
