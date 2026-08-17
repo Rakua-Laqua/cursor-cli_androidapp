@@ -348,6 +348,10 @@ workspace select
 
 ここを通過するまでPhase 2へ進まない。
 
+### 実施記録
+
+2026-08-17、Windows 上で mock ACP に対する `remote-dev e2e` が成功した。記録は `docs/local_e2e_report.md`。実 Cursor CLI に対する `remote-dev e2e` は未実施。
+
 ---
 
 # Phase 2 — Relay + Android Text Remote
@@ -1042,6 +1046,8 @@ TASK-105 Local E2Eが成功するまでAndroid実装へ進まない。
 理由:
 Cursor CLI / ACP側が成立しない状態でAndroidを作ると、UIが未確定Backend APIへ依存する。
 
+2026-08-17: mock ACP での Local E2E は成功。記録は `docs/local_e2e_report.md`。
+
 ## Gate B
 
 TASK-204 Chat StreamingがAndroid実機で動くまでDiff / Voiceへ進まない。
@@ -1089,4 +1095,4 @@ Milestone 1 — Cursor CLI Local Core
 
 **Cursor Desktopを一度も起動せず、PC上のLocal DaemonだけでWorkspaceを指定し、Cursor Sessionを作成・継続・再開・停止できる。**
 
-この状態を確認してからRelayとAndroidへ進む。
+この状態を確認してからRelayとAndroidへ進む。mock ACP での確認記録は `docs/local_e2e_report.md`。

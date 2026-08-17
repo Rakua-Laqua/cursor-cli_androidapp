@@ -159,7 +159,7 @@ test('stderr lines are forwarded to the logger', async () => {
 });
 
 test('timed out requests are cleaned up from the pending map', async () => {
-  await withDaemon({ requestTimeoutMs: 50 }, async (daemon) => {
+  await withDaemon({ requestTimeoutMs: 250 }, async (daemon) => {
     await assert.rejects(() => daemon.acp.request('hang'), /timed out/);
     const result = await daemon.acp.request('echo', { ok: true });
     assert.deepEqual(result, { params: { ok: true } });

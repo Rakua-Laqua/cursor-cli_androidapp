@@ -1,6 +1,6 @@
 {
   "name": "cursor-cli-androidapp",
-  "version": "1.1.1",
+  "version": "1.2.0",
   "private": true,
   "workspaces": [
     "protocol",
@@ -11,6 +11,7 @@
     "build": "npm run build --workspace @cursor-remote/protocol && npm run build --workspace @cursor-remote/daemon && npm run build --workspace @cursor-remote/relay",
     "typecheck": "npm run typecheck --workspace @cursor-remote/protocol && npm run typecheck --workspace @cursor-remote/daemon && npm run typecheck --workspace @cursor-remote/relay",
     "test": "npm run test --workspace @cursor-remote/protocol && npm run test --workspace @cursor-remote/daemon",
+    "remote-dev": "npm run remote-dev --workspace @cursor-remote/daemon --",
     "lint": "npm run typecheck",
     "format": "prettier --write .",
     "format:check": "prettier --check ."

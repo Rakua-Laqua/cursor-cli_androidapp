@@ -1,5 +1,22 @@
 # CHANGELOG
 
+## [1.2.0] - 2026-08-17
+
+### 追加
+
+- Local E2E ハーネス `remote-dev` を追加した。`workspace list` / `workspace select` / `workspace register`、`session create` / `session list` / `session send` / `session cancel` / `session load`、`e2e` を、リポジトリルートの `npm run remote-dev` から実行できる。`session list` は `workspaceId` を省略すると登録済み全 Workspace の Session を返す。Cursor Desktop は不要。Relay と Android の実データフローは Phase 2。
+- `remote-dev e2e` は `workspace select` → `session create` → prompt → streaming → cancel → Daemon 再起動 → `session load` → 会話継続を一連で実行する。`--state-dir` / `--allowed-root` / `--workspace` を省略すると一時ディレクトリを使う。リポジトリ全体を既定の `allowedRoots` にはしない。自動テストは mock ACP を使う。実 Cursor CLI に対する `remote-dev e2e` は未実施。
+- 単発コマンドは `--state-dir` と `--allowed-root`（または `REMOTE_DEV_STATE_DIR` / `REMOTE_DEV_ALLOWED_ROOTS`）が必須。各起動が新しい ACP プロセスになるため、`session send` は送る前に `session.load` する。実行中の streaming を止める場合は `session send` を Ctrl+C するか、`e2e` を使う。
+- `--json` で結果を JSON 出力する。`session create` は `--title` / `--prompt`、`e2e` は `--workspace`、ACP は `--acp-command` / `--acp-arg` を取る。`--acp-command` を省略すると実 Cursor CLI の ACP を解決する。`--acp-arg` には `--acp-command` が必要。
+
+### ドキュメント
+
+- `docs/local_e2e_report.md` に、Windows 上で mock ACP に対する `remote-dev e2e` が成功したことを記録した。コマンドは `npm run build`、`npm run remote-dev -- --help`、`npm run remote-dev -- e2e --acp-command node --acp-arg test/fixtures/mock-acp.mjs`。成功出力は `streamed echo:e2e-stream` から `e2e ok` まで。実 Cursor CLI に対する `remote-dev e2e` は未実施。
+
+### テスト
+
+- `remote-dev` の argv、単発コマンドの `--state-dir` / `--allowed-root` 必須、mock ACP での e2e 一連を検証するテストを追加した。
+
 ## [1.1.1] - 2026-08-17
 
 ### 変更
