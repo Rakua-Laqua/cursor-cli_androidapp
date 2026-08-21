@@ -7,7 +7,7 @@
 - 対象リポジトリ: `Rakua-Laqua/cursor-cli_androidapp`
 - ブランチ: `main`
 - 直前リリース基準（v1.3.0）: `c7bff3137511396d8a86d27a341fcddb70f8b316`（`v1.3.0にアップデート`）
-- パッケージ版: `1.6.1`（Android `versionCode` 18 / `versionName` 1.6.1）
+- パッケージ版: `1.7.0`（Android `versionCode` 19 / `versionName` 1.7.0）
 
 この文書は「いまどこまで動くか」の正本である。設計の正本は仕様書、作業順の正本は実装計画である。計画書の未着手タスクを消さない。完了扱いにできるのはリリース済みの範囲だけである。
 
@@ -15,7 +15,7 @@
 
 ## 1. いまの結論
 
-**Cursor Desktop なしで、PC 上の Local Daemon だけから Workspace / Session を操作できる。** Relay 経由の Command / Event 中継も localhost では動く。Device Pairing は v1.4.0、Android Skeleton は v1.5.0、Workspace / Session UI は v1.6.0。Chat 送受信、QR カメラ、TLS、Gate B は未完。次は TASK-204。
+**Cursor Desktop なしで、PC 上の Local Daemon だけから Workspace / Session を操作し、Android からメモリ内 Chat を送受信できる。** Relay 経由の Command / Event 中継も localhost では動く。Device Pairing は v1.4.0、Android Skeleton は v1.5.0、Workspace / Session UI は v1.6.0、Chat は v1.7.0。QR カメラ、TLS、履歴永続化 / 再接続復元、Gate B は未完。次は Android 実機の Gate B。
 
 | 区分 | 状態 |
 | --- | --- |
@@ -25,11 +25,11 @@
 | TASK-201 Device Pairing | **完了・v1.4.0 でリリース済み** |
 | TASK-202 Android Application Skeleton | **実装済み・v1.5.0** |
 | TASK-203 Workspace / Session UI | **実装済み・v1.6.0 / compile 修正 v1.6.1** |
-| TASK-204 Chat Streaming UI | **未着手** |
+| TASK-204 Chat Streaming UI | **実装済み・v1.7.0** |
 | Gate B（Android 実機の Chat Streaming） | **未到達** |
 | Phase 3 以降（Diff / Voice / Permission UI など） | **未着手** |
 
-次の作業は TASK-204 Chat Streaming UI である。
+次の作業は Gate B（Android 実機の Chat Streaming）である。
 
 ---
 
@@ -52,11 +52,16 @@
 
 - Pairing JSON 登録 / 既存 Machine 再認証、Workspace / Session 一覧、New Session、過去 Session 再開。Chat / Camera は未実装。
 
+### 動く（v1.7.0）
+
+- 選択中 Session への Prompt と逐次応答（メモリ内 Chat）。履歴永続化 / 再接続復元はない。
+
 ### まだない
 
 - Pairing の CLI / QR 表示 UI（`remote-dev` に pairing サブコマンドはない）。
-- Android の QR カメラ、Chat 送受信（TASK-204）。
+- Android の QR カメラ。
 - TLS / インターネット公開用の認証。`/machine` は localhost の非認証 `ws://` のまま。
+- Chat 履歴の永続化と再接続復元。
 - Push、Account Usage、File content 保存、Diff UI、Voice、Permission UI。
 - 単発 `session cancel`（別プロセスからの停止は未実測のため非公開）。
 
@@ -78,7 +83,7 @@
 | TASK-000 | `android/` `daemon/` `relay/` `protocol/` `docs/` の module boundary、format / lint | リリース済み |
 | TASK-001 | Remote Protocol の Event / Command 型と JSON 境界 | リリース済み。v1.3.0 で `command` / `event` / `result` frame を追加 |
 
-Android は TASK-203 まで。Chat は TASK-204。
+Android は TASK-204 まで。Gate B は未実施。
 
 ### Phase 1 — Cursor CLI Local Core（Milestone 1）
 
@@ -110,9 +115,9 @@ npm run remote-dev -- e2e
 | TASK-201 | Device Pairing | **リリース済み v1.4.0** |
 | TASK-202 | Android Application Skeleton | **実装済み v1.5.0** |
 | TASK-203 | Workspace / Session UI | **実装済み v1.6.0 / compile 修正 v1.6.1** |
-| TASK-204 | Chat Streaming UI | 未着手 |
+| TASK-204 | Chat Streaming UI | **実装済み v1.7.0** |
 
-Phase 2 の残作業は TASK-204。Gate B は Android 実機の Chat Streaming まで通過しない。
+Phase 2 の Chat は v1.7.0。Gate B は Android 実機の Chat Streaming まで通過しない。
 
 ### Phase 3 以降
 
@@ -250,7 +255,7 @@ Android Application Skeleton。Protocol / Daemon / Relay の公開挙動は変�
 
 実装済み:
 
-- Navigation Compose の 4 destination。開始は Machines。各画面は TASK-203 / TASK-204 未実装のプレースホルダで前後遷移できる
+- Navigation Compose の 4 destination。開始は Machines。TASK-202 時点では TASK-203 / TASK-204 未実装のプレースホルダで前後遷移できた
 - Application 所有の手動 DI（`AppContainer`）。Room、Keystore credential store、OkHttp WebSocket transport、ViewModel factory。Hilt / Koin なし
 - OkHttp WebSocket transport。`connect` / `send` / `disconnect`、`ConnectionState` StateFlow、受信 text Flow。URL は `ws` / `wss` のみ。起動時自動接続なし
 - Room の `MachineEntity` / `MachineDao` / `CursorRemoteDatabase`。Flow 一覧。秘密情報や message / file 内容は保存しない
@@ -260,7 +265,6 @@ Android Application Skeleton。Protocol / Daemon / Relay の公開挙動は変�
 
 未実装のまま残すもの:
 
-- TASK-204 の Chat 送受信
 - QR カメラ / pairing UI
 - TLS、Relay 自動接続
 - Gate B（Android 実機の Chat Streaming）
@@ -271,7 +275,13 @@ v1.5.0 時点の次は TASK-203。
 
 ## 7. TASK-203（v1.6.0 実装・v1.6.1 compile 修正）
 
-Android だけで Pairing JSON / 再認証、Workspace / Session 一覧、New Session、過去 Session 再開。v1.6.1 は Compose `weight` 明示 import の compile 修正のみ。Chat / Camera / Gate B は未完。次は TASK-204。
+Android だけで Pairing JSON / 再認証、Workspace / Session 一覧、New Session、過去 Session 再開。v1.6.1 は Compose `weight` 明示 import の compile 修正のみ。Camera / Gate B は未完。Chat は v1.7.0。
+
+---
+
+## 7.1 TASK-204（v1.7.0）
+
+選択中 Session へ Prompt を送り、User / Assistant を逐次表示し、status / error / completed / stop を扱う。会話はメモリ内のみ。履歴永続化 / 再接続復元、QR カメラ、TLS、Android 実機 Gate B は未完。
 
 ---
 
@@ -285,19 +295,19 @@ Android だけで Pairing JSON / 再認証、Workspace / Session 一覧、New Se
 | TASK-200 `npm test` / lint / format | 成功 | v1.3.0 リリース時 |
 | TASK-201 `npm run build` | 成功 | v1.4.0 |
 | TASK-201 `npm test` / lint / format:check | 成功 | v1.4.0 リリース時 |
-| Android `assembleDebug` / `testDebugUnitTest` | GitHub Actions CI | v1.6.1 の Compose `weight` import 修正は本記録時点で未検証。CI 成功は未確認 |
+| Android `assembleDebug` / `testDebugUnitTest` | GitHub Actions CI | v1.6.1 成功済み。v1.7.0 の unit / build は Codex が GitHub Actions で実施 |
 | Android 実機の Relay / Pairing / Chat | 未実施 | Gate B 未到達 |
 
 ---
 
 ## 9. モジュール別の現状
 
-| モジュール | 実装済み v1.6.0 | 未着手 |
+| モジュール | 実装済み v1.7.0 | 未着手 |
 | --- | --- | --- |
 | `protocol/` | Event / Command 型、Remote frame、Pairing 型・証明・QR payload | Android 向け追加画面用の型は不要な範囲で増やさない |
 | `daemon/` | ACP、Workspace、metadata、`remote-dev`、Relay outbound、`PairingManager`、device 永続化 | pairing CLI、Permission 実処理 |
 | `relay/` | WebSocket routing / correlation / heartbeat、`/client` の pairing ゲート | TLS、Push |
-| `android/` | TASK-203 Workspace / Session UI | TASK-204 Chat、QR カメラ |
+| `android/` | TASK-204 Chat（メモリ内） | QR カメラ、履歴永続化 / 再接続復元 |
 | `docs/` | 仕様、計画、ACP 実測、Local E2E、本ファイル | — |
 
 ---
@@ -307,8 +317,7 @@ Android だけで Pairing JSON / 再認証、Workspace / Session 一覧、New Se
 計画書と Gate を崩さない。
 
 ```text
-TASK-204  Chat Streaming UI
-         → Gate B まで Android 実機で Chat が動くこと
+Gate B まで Android 実機で Chat が動くこと
 ```
 
-TASK-203 は v1.6.0 実装・v1.6.1 compile 修正。次は TASK-204。Camera / TLS / Gate B は未完。
+TASK-204 は v1.7.0。Camera / TLS / 履歴永続化 / 再接続復元 / Gate B は未完。

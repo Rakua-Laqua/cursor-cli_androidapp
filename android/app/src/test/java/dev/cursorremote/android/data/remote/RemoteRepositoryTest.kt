@@ -2,16 +2,24 @@ package dev.cursorremote.android.data.remote
 
 import dev.cursorremote.android.FakeTransport
 import dev.cursorremote.android.JavaEcdsaCredentialStore
+import dev.cursorremote.android.eventJson
+import dev.cursorremote.android.hangSessionSend
+import dev.cursorremote.android.lastCommand
 import dev.cursorremote.android.requestIdOf
 import dev.cursorremote.android.resultJson
 import dev.cursorremote.android.data.protocol.PairingQrPayload
+import dev.cursorremote.android.data.protocol.RemoteEvent
 import dev.cursorremote.android.data.protocol.RemoteProtocol
 import dev.cursorremote.android.data.transport.ConnectionState
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
 
@@ -94,6 +102,71 @@ class RemoteRepositoryTest {
             assertEquals(ConnectionState.Disconnected, transport.connectionState.value)
         }
 
+    @Test
+    fun eventsAreDispatchedSendWaitsBeyondTimeoutAndCancelRunsConcurrently() =
+        withRepository(timeoutMs = 80) { repo, transport ->
+            repo.authenticate("ws://127.0.0.1:8787", "pc-1", "device-1")
+            hangSessionSend(transport)
+            val received = mutableListOf<RemoteEvent>()
+            val collectJob = launch(Dispatchers.Unconfined) { repo.events.collect { received += it } }
+            transport.emit(eventJson("session.status_changed", "sess-1", """{"status":"running"}"""))
+            assertEquals("session.status_changed", received.single().type)
+            val sendJob =
+                async {
+                    repo.sendSessionPrompt("sess-1", "hello")
+                }
+            delay(160)
+            assertTrue(sendJob.isActive)
+            val sendFrame = lastCommand(transport, "session.send")
+            assertTrue(sendFrame.contains("\"sessionId\":\"sess-1\""))
+            assertTrue(sendFrame.contains("\"type\":\"session.send\""))
+            repo.cancelSession("sess-1")
+            assertTrue(lastCommand(transport, "session.cancel").contains("\"sessionId\":\"sess-1\""))
+            assertTrue(sendJob.isActive)
+            transport.emit(resultJson(requestIdOf(sendFrame), ok = true, value = "null"))
+            sendJob.await()
+            collectJob.cancel()
+        }
+
+    @Test
+    fun moreThanBufferEventsAreDeliveredInOrderWithoutDrop() =
+        withRepository { repo, transport ->
+            repo.authenticate("ws://127.0.0.1:8787", "pc-1", "device-1")
+            val received = mutableListOf<RemoteEvent>()
+            val collectJob = launch(Dispatchers.Unconfined) { repo.events.collect { received += it } }
+            repeat(120) { index ->
+                transport.emit(
+                    eventJson(
+                        "assistant.message",
+                        "sess-1",
+                        """{"text":"$index","delta":true}""",
+                        eventId = "evt-$index",
+                    ),
+                )
+            }
+            assertEquals(120, received.size)
+            assertEquals((0 until 120).map { "evt-$it" }, received.map { it.eventId })
+            collectJob.cancel()
+        }
+
+    @Test
+    fun disconnectFailsInFlightSessionSend() =
+        withRepository { repo, transport ->
+            repo.authenticate("ws://127.0.0.1:8787", "pc-1", "device-1")
+            hangSessionSend(transport)
+            val sendJob =
+                async {
+                    try {
+                        repo.sendSessionPrompt("sess-1", "hello")
+                        fail("expected disconnect")
+                    } catch (error: RemoteRepositoryException) {
+                        assertEquals("Disconnected", error.message)
+                    }
+                }
+            repo.disconnect()
+            sendJob.await()
+        }
+
     private suspend fun assertAuthFailure(
         repo: RemoteRepository,
         transport: FakeTransport,
@@ -119,7 +192,7 @@ class RemoteRepositoryTest {
         timeoutMs: Long = 1_000,
         autoRespond: Boolean = true,
         autoChallenge: Boolean = true,
-        block: suspend (RemoteRepository, FakeTransport) -> Unit,
+        block: suspend CoroutineScope.(RemoteRepository, FakeTransport) -> Unit,
     ) {
         val job = SupervisorJob()
         val scope = CoroutineScope(job + Dispatchers.Unconfined)

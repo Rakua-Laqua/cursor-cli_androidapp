@@ -3,6 +3,7 @@ package dev.cursorremote.android.data.protocol
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Test
@@ -126,6 +127,58 @@ class RemoteProtocolTest {
     }
 
     @Test
+    fun chatPayloadsAndEventsParseTypedAndRejectMalformed() {
+        assertEquals("""{"text":"hello"}""", RemoteProtocol.sessionSendPayload("hello").toString())
+        assertEquals("{}", RemoteProtocol.sessionCancelPayload().toString())
+        val status =
+            RemoteProtocol.parseChatEvent(chatRemoteEvent("session.status_changed", """{"status":"running"}"""))
+                as ChatEvent.SessionStatusChanged
+        assertEquals("running", status.status)
+        val user =
+            RemoteProtocol.parseChatEvent(chatRemoteEvent("user.message", """{"text":"hi"}""")) as ChatEvent.UserMessage
+        assertEquals("hi", user.text)
+        val assistant =
+            RemoteProtocol.parseChatEvent(chatRemoteEvent("assistant.message", """{"text":"Hel","delta":true}"""))
+                as ChatEvent.AssistantMessage
+        assertEquals("Hel", assistant.text)
+        assertTrue(assistant.delta)
+        val assistantStatus =
+            RemoteProtocol.parseChatEvent(chatRemoteEvent("assistant.status", """{"status":"thinking"}"""))
+                as ChatEvent.AssistantStatus
+        assertEquals("thinking", assistantStatus.status)
+        val completed =
+            RemoteProtocol.parseChatEvent(chatRemoteEvent("agent.completed", """{"reason":null}"""))
+                as ChatEvent.AgentCompleted
+        assertNull(completed.reason)
+        val failed =
+            RemoteProtocol.parseChatEvent(chatRemoteEvent("agent.failed", """{"reason":"boom"}""")) as ChatEvent.AgentFailed
+        assertEquals("boom", failed.reason)
+        val interrupted =
+            RemoteProtocol.parseChatEvent(chatRemoteEvent("agent.interrupted", """{"reason":null}"""))
+                as ChatEvent.AgentInterrupted
+        assertEquals("sess-1", interrupted.sessionId)
+        val workspaceJson =
+            """{"workspaceId":"ws-1","name":"app","path":"/app","gitBranch":"main","modified":false,"activeSessionCount":1,"lastUsedAt":null}"""
+        val unrelated =
+            RemoteProtocol.parseIncomingFrame(
+                """{"kind":"event","event":{"eventId":"evt-1","sessionId":null,"timestamp":"t","type":"workspace.updated","payload":$workspaceJson}}""",
+            ) as IncomingRemoteFrame.Event
+        assertNull(RemoteProtocol.parseChatEvent(unrelated.event))
+        val unknown =
+            RemoteProtocol.parseIncomingFrame(
+                """{"kind":"event","event":{"eventId":"evt-2","sessionId":"sess-1","timestamp":"t","type":"tool.started","payload":{}}}""",
+            ) as IncomingRemoteFrame.Event
+        assertNull(RemoteProtocol.parseChatEvent(unknown.event))
+        assertChatParseError("sessionId must be a non-empty string") {
+            chatRemoteEvent("user.message", """{"text":"hi"}""", sessionId = null)
+        }
+        assertChatParseError("delta") { chatRemoteEvent("assistant.message", """{"text":"hi"}""") }
+        assertChatParseError("text") { chatRemoteEvent("user.message", """{"delta":true}""") }
+        assertChatParseError("status") { chatRemoteEvent("session.status_changed", """{"status":"unknown"}""") }
+        assertChatParseError("reason") { chatRemoteEvent("agent.completed", """{}""") }
+    }
+
+    @Test
     fun sessionPayloadRequiresKnownStatusAndNonEmptyTitle() {
         val valid =
             """{"remoteSessionId":"s1","cursorSessionId":null,"workspaceId":"ws-1","title":"Session","status":"idle","createdAt":"c","updatedAt":"u"}"""
@@ -135,6 +188,31 @@ class RemoteProtocolTest {
             fail("expected status rejection")
         } catch (error: ProtocolParseError) {
             assertTrue(error.message!!.contains("status"))
+        }
+    }
+
+    private fun chatRemoteEvent(
+        type: String,
+        payload: String,
+        sessionId: String? = "sess-1",
+    ): RemoteEvent {
+        val sessionJson = if (sessionId == null) "null" else "\"$sessionId\""
+        val frame =
+            RemoteProtocol.parseIncomingFrame(
+                """{"kind":"event","event":{"eventId":"e1","sessionId":$sessionJson,"timestamp":"t","type":"$type","payload":$payload}}""",
+            ) as IncomingRemoteFrame.Event
+        return frame.event
+    }
+
+    private fun assertChatParseError(
+        messagePattern: String,
+        block: () -> Unit,
+    ) {
+        try {
+            block()
+            fail("expected ProtocolParseError")
+        } catch (error: ProtocolParseError) {
+            assertTrue("message=${error.message}", Regex(messagePattern).containsMatchIn(error.message ?: ""))
         }
     }
 

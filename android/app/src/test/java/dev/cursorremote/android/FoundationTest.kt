@@ -8,6 +8,7 @@ import dev.cursorremote.android.data.remote.RemoteRepository
 import dev.cursorremote.android.data.security.DeviceCredentialStore
 import dev.cursorremote.android.data.transport.ConnectionState
 import dev.cursorremote.android.data.transport.TransportMessage
+import dev.cursorremote.android.data.transport.TransportMessageQueue
 import dev.cursorremote.android.data.transport.WebSocketTransport
 import dev.cursorremote.android.state.CursorRemoteViewModel
 import dev.cursorremote.android.ui.AppDestination
@@ -25,7 +26,10 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.take
+import kotlinx.coroutines.flow.toList
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -54,7 +58,7 @@ class FoundationTest {
         assertEquals(AppDestination.Sessions, AppDestination.Workspaces.next)
         assertEquals(AppDestination.Chat, AppDestination.Sessions.next)
         assertNull(AppDestination.Chat.next)
-        assertEquals("TASK-204", AppDestination.Chat.unimplementedTaskId)
+        assertEquals("chat", AppDestination.Chat.route)
     }
 
     @Test
@@ -69,6 +73,12 @@ class FoundationTest {
             assertTrue(state.sessions.isEmpty())
             assertEquals(ConnectionState.Disconnected, viewModel.connectionState.value)
             assertEquals(RemoteConnectionState.Disconnected, state.remoteConnection)
+            assertTrue(state.chatMessages.isEmpty())
+            assertNull(state.chatStatus)
+            assertNull(state.chatError)
+            assertNull(state.chatTerminal)
+            assertFalse(state.isSending)
+            assertFalse(state.isStopping)
         }
     }
 
@@ -159,6 +169,129 @@ class FoundationTest {
                 assertEquals("missing", viewModel.uiState.value.errorMessage)
                 assertEquals("ws-1", viewModel.uiState.value.selectedWorkspaceId)
                 assertEquals(RemoteConnectionState.Ready, viewModel.uiState.value.remoteConnection)
+            }
+        }
+    }
+
+    @Test
+    fun chatFiltersSessionAccumulatesDeltaDedupsEchoAndKeepsTerminal() {
+        withViewModel { viewModel, dao, transport ->
+            runBlocking {
+                dao.upsert(pairedMachine())
+                assertTrue(viewModel.connectExistingMachine("pc-1"))
+                assertTrue(viewModel.openWorkspace("ws-1"))
+                assertTrue(viewModel.resumeSession("sess-1"))
+                hangSessionSend(transport, hangCancel = true)
+                viewModel.sendPrompt("hello")
+                assertEquals("hello", viewModel.uiState.value.chatMessages.single().text)
+                assertTrue(viewModel.uiState.value.isSending)
+                transport.emit(eventJson("user.message", "sess-1", """{"text":"he"}"""))
+                transport.emit(eventJson("user.message", "sess-1", """{"text":"llo"}"""))
+                assertEquals(1, viewModel.uiState.value.chatMessages.size)
+                transport.emit(eventJson("assistant.message", "other", """{"text":"nope","delta":true}"""))
+                assertEquals(1, viewModel.uiState.value.chatMessages.size)
+                transport.emit(eventJson("assistant.message", "sess-1", """{"text":"Hel","delta":true}"""))
+                transport.emit(eventJson("assistant.message", "sess-1", """{"text":"lo","delta":true}"""))
+                assertEquals("Hello", viewModel.uiState.value.chatMessages.last().text)
+                assertTrue(viewModel.uiState.value.chatMessages.last().isStreaming)
+                transport.emit(eventJson("assistant.message", "sess-1", """{"text":"Hi","delta":false}"""))
+                assertEquals("Hi", viewModel.uiState.value.chatMessages.last().text)
+                transport.emit(eventJson("assistant.status", "sess-1", """{"status":"thinking"}"""))
+                assertEquals("thinking", viewModel.uiState.value.chatStatus)
+                viewModel.stopSession()
+                assertTrue(viewModel.uiState.value.isStopping)
+                assertTrue(viewModel.uiState.value.isSending)
+                transport.emit(eventJson("agent.interrupted", "sess-1", """{"reason":null}"""))
+                assertEquals("interrupted", viewModel.uiState.value.chatTerminal)
+                assertFalse(viewModel.uiState.value.chatMessages.last().isStreaming)
+                assertFalse(viewModel.uiState.value.isSending)
+                assertFalse(viewModel.uiState.value.isStopping)
+                transport.emit(resultJson(requestIdOf(lastCommand(transport, "session.send")), ok = false, value = "null", error = "cancelled"))
+                assertEquals("interrupted", viewModel.uiState.value.chatTerminal)
+                assertNull(viewModel.uiState.value.chatError)
+                viewModel.selectSession("sess-2")
+                assertTrue(viewModel.uiState.value.chatMessages.isEmpty())
+                assertNull(viewModel.uiState.value.chatTerminal)
+                assertFalse(viewModel.uiState.value.isSending)
+                viewModel.sendPrompt("   ")
+                assertTrue(viewModel.uiState.value.chatMessages.isEmpty())
+                assertTrue(transport.sent.none { commandType(it) == "session.send" && it.contains("\"text\":\"   \"") })
+            }
+        }
+    }
+
+    @Test
+    fun transportMessageQueueDeliversBufferedFramesInOrderWithoutDrop() {
+        val queue = TransportMessageQueue()
+        val expected = (0 until 120).map { index -> TransportMessage(1L, "frame-$index") }
+        expected.forEach(queue::enqueue)
+        val received =
+            runBlocking {
+                withTimeout(1_000) {
+                    queue.messages.take(120).toList()
+                }
+            }
+        assertEquals(expected, received)
+    }
+
+    @Test
+    fun sendSuccessKeepsSendingUntilTerminalEvent() {
+        withViewModel { viewModel, dao, transport ->
+            runBlocking {
+                dao.upsert(pairedMachine())
+                assertTrue(viewModel.connectExistingMachine("pc-1"))
+                assertTrue(viewModel.openWorkspace("ws-1"))
+                assertTrue(viewModel.resumeSession("sess-1"))
+                hangSessionSend(transport)
+                viewModel.sendPrompt("hello")
+                assertTrue(viewModel.uiState.value.isSending)
+                transport.emit(resultJson(requestIdOf(lastCommand(transport, "session.send")), ok = true, value = "null"))
+                assertTrue(viewModel.uiState.value.isSending)
+                assertNull(viewModel.uiState.value.chatTerminal)
+                transport.emit(eventJson("agent.completed", "sess-1", """{"reason":null}"""))
+                assertFalse(viewModel.uiState.value.isSending)
+                assertEquals("completed", viewModel.uiState.value.chatTerminal)
+            }
+        }
+    }
+
+    @Test
+    fun userEchoPrefixFullMismatchAndTerminalClearPending() {
+        withViewModel { viewModel, dao, transport ->
+            runBlocking {
+                dao.upsert(pairedMachine())
+                assertTrue(viewModel.connectExistingMachine("pc-1"))
+                assertTrue(viewModel.openWorkspace("ws-1"))
+                assertTrue(viewModel.resumeSession("sess-1"))
+                hangSessionSend(transport)
+                viewModel.sendPrompt("hello")
+                transport.emit(eventJson("user.message", "sess-1", """{"text":"xyz"}"""))
+                assertEquals(listOf("hello", "xyz"), viewModel.uiState.value.chatMessages.map { it.text })
+                transport.emit(eventJson("agent.completed", "sess-1", """{"reason":null}"""))
+                viewModel.sendPrompt("world")
+                transport.emit(eventJson("user.message", "sess-1", """{"text":"world"}"""))
+                assertEquals(listOf("hello", "xyz", "world"), viewModel.uiState.value.chatMessages.map { it.text })
+                transport.emit(resultJson(requestIdOf(lastCommand(transport, "session.send")), ok = true, value = "null"))
+                transport.emit(eventJson("agent.completed", "sess-1", """{"reason":null}""", eventId = "evt-done"))
+                viewModel.sendPrompt("hello")
+                transport.emit(eventJson("agent.completed", "sess-1", """{"reason":null}""", eventId = "evt-no-echo"))
+                viewModel.sendPrompt("next")
+                transport.emit(eventJson("user.message", "sess-1", """{"text":"next"}"""))
+                assertEquals(
+                    listOf("hello", "xyz", "world", "hello", "next"),
+                    viewModel.uiState.value.chatMessages.map { it.text },
+                )
+                transport.emit(eventJson("agent.completed", "sess-1", """{"reason":null}""", eventId = "evt-next"))
+                viewModel.sendPrompt("fail")
+                transport.emit(resultJson(requestIdOf(lastCommand(transport, "session.send")), ok = false, value = "null", error = "nope"))
+                assertEquals("nope", viewModel.uiState.value.chatError)
+                assertFalse(viewModel.uiState.value.isSending)
+                viewModel.sendPrompt("ok")
+                transport.emit(eventJson("user.message", "sess-1", """{"text":"ok"}"""))
+                assertEquals(
+                    listOf("hello", "xyz", "world", "hello", "next", "fail", "ok"),
+                    viewModel.uiState.value.chatMessages.map { it.text },
+                )
             }
         }
     }
@@ -349,4 +482,30 @@ internal fun successBody(
             else -> "null"
         }
     return resultJson(requestId, ok = true, value = value)
+}
+
+internal fun eventJson(
+    type: String,
+    sessionId: String,
+    payload: String,
+    eventId: String = "evt-1",
+): String =
+    """{"kind":"event","event":{"eventId":"$eventId","sessionId":"$sessionId","timestamp":"t","type":"$type","payload":$payload}}"""
+
+internal fun lastCommand(
+    transport: FakeTransport,
+    type: String,
+): String = transport.sent.last { commandType(it) == type }
+
+internal fun hangSessionSend(
+    transport: FakeTransport,
+    hangCancel: Boolean = false,
+) {
+    transport.onSend = { text ->
+        val type = commandType(text)
+        val hang = type == "session.send" || (hangCancel && type == "session.cancel")
+        if (!hang) {
+            transport.emit(successBody(requestIdOf(text), text))
+        }
+    }
 }

@@ -2,9 +2,9 @@
 
 Android ネイティブクライアントです。設計上の UI 技術は Kotlin / Jetpack Compose です。
 
-## v1.6.0（TASK-203）
+## v1.7.0（TASK-204）
 
-開始画面は Machines。Pairing QR v1 JSON の貼り付け、または既存 Machine の再認証に成功したときだけ Workspaces / Sessions へ進みます。Workspace は name / path / gitBranch / modified / activeSessionCount、Session は title / status / updatedAt を表示します。Chat は TASK-204 未実装。Camera / TLS / Gate B は含みません。
+開始画面は Machines。Pairing QR v1 JSON の貼り付け、または既存 Machine の再認証に成功したときだけ Workspaces / Sessions / Chat へ進みます。Workspace は name / path / gitBranch / modified / activeSessionCount、Session は title / status / updatedAt を表示します。Chat は User / Assistant、status / error / completed / stopped、入力、Send、応答中 Stop をメモリ内で扱います。履歴永続化 / 再接続復元、Camera / TLS / Gate B は含みません。
 
 秘密鍵は Android Keystore に置き export しません。Room には成功した `deviceId` と接続情報だけを保存します。
 
@@ -14,4 +14,4 @@ Android ネイティブクライアントです。設計上の UI 技術は Kotl
 gradle :app:assembleDebug :app:testDebugUnitTest
 ```
 
-JVM unit test は codec、canonical proof、invalid QR、request correlation / auth、ViewModel の list / new / resume を検証します。実機、network、Android Keystore は使いません。
+JVM unit test は codec、canonical proof、invalid QR、request correlation / auth、ViewModel の list / new / resume、Chat payload / event / send / terminal を検証します。実機、network、Android Keystore は使いません。

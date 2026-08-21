@@ -360,7 +360,7 @@ workspace select
 
 # Phase 2 — Relay + Android Text Remote
 
-2026-08-22 時点: TASK-200 は v1.3.0、TASK-201 は v1.4.0、TASK-202 は v1.5.0、TASK-203 は v1.6.0 で実装済み。TASK-204 と Gate B は未完。次は TASK-204。詳細は `docs/implementation_status.md`。Gate B〜D は維持する。
+2026-08-22 時点: TASK-200 は v1.3.0、TASK-201 は v1.4.0、TASK-202 は v1.5.0、TASK-203 は v1.6.0、TASK-204 は v1.7.0 で実装済み。Gate B は未完。詳細は `docs/implementation_status.md`。Gate B〜D は維持する。
 
 ## TASK-200: Relay WebSocket Core
 
@@ -492,6 +492,10 @@ Chatの基本縦切り。
 ### 完了条件
 
 AndroidからPromptを送り、Cursorの応答が逐次表示される。
+
+### 実施記録
+
+2026-08-22、v1.7.0 で実装。選択中 Session への Prompt、逐次応答、status / error / completed / stop。会話はメモリ内のみ。履歴永続化 / 再接続復元、QR カメラ、TLS、Android 実機 Gate B は未完。
 
 ---
 
@@ -1073,6 +1077,8 @@ Cursor CLI / ACP側が成立しない状態でAndroidを作ると、UIが未確�
 ## Gate B
 
 TASK-204 Chat StreamingがAndroid実機で動くまでDiff / Voiceへ進まない。
+
+2026-08-22: TASK-204 は v1.7.0。Android 実機確認は未実施のため Gate B は未通過。
 
 理由:
 Remote通信とSession lifecycleを先に安定させる。

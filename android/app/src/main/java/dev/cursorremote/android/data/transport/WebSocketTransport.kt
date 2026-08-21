@@ -3,12 +3,12 @@ package dev.cursorremote.android.data.transport
 import java.net.URI
 import java.util.Locale
 import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.Flow
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.receiveAsFlow
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -26,6 +26,15 @@ data class TransportMessage(
     val generation: Long,
     val text: String,
 )
+
+internal class TransportMessageQueue {
+    private val channel = Channel<TransportMessage>(Channel.UNLIMITED)
+    val messages: Flow<TransportMessage> = channel.receiveAsFlow()
+
+    fun enqueue(message: TransportMessage) {
+        check(channel.trySend(message).isSuccess) { "Transport message queue rejected a frame" }
+    }
+}
 
 interface WebSocketTransport {
     val connectionState: StateFlow<ConnectionState>
@@ -49,8 +58,8 @@ class OkHttpWebSocketTransport(
     private val _connectionState = MutableStateFlow(ConnectionState.Disconnected)
     override val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
-    private val _incomingMessages = MutableSharedFlow<TransportMessage>(extraBufferCapacity = 64)
-    override val incomingMessages: Flow<TransportMessage> = _incomingMessages.asSharedFlow()
+    private val incomingQueue = TransportMessageQueue()
+    override val incomingMessages: Flow<TransportMessage> = incomingQueue.messages
 
     override val generation: Long
         get() = generationCounter.get()
@@ -80,7 +89,7 @@ class OkHttpWebSocketTransport(
                     }
                     currentGeneration = generationCounter.get()
                 }
-                _incomingMessages.tryEmit(TransportMessage(currentGeneration, text))
+                incomingQueue.enqueue(TransportMessage(currentGeneration, text))
             }
 
             override fun onClosing(

@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## [1.7.0] - 2026-08-22
+
+### 追加
+
+- Android Chat の基本縦切り（TASK-204）。選択中 Session へ Prompt を送り、User / Assistant の逐次表示、status / error / completed / stopped、応答中 Stop を扱う。会話はメモリ内のみ。
+
+### 変更
+
+- パッケージ版 1.7.0、Android `versionCode` 19 / `versionName` 1.7.0。Protocol / Daemon / Relay の公開挙動は変えない。Android 実機 Gate B、QR カメラ、TLS、履歴永続化 / 再接続復元は未完。
+
+### テスト
+
+- JVM unit test で Chat payload / event 解析、Repository の event 配信と長時間 send、ViewModel の session フィルタ / delta / echo 重複排除 / terminal を検証する。
+
 ## [1.6.1] - 2026-08-22
 
 ### 修正

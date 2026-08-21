@@ -61,6 +61,62 @@ data class RemoteEvent(
     val payload: JsonElement,
 )
 
+sealed class ChatEvent {
+    abstract val eventId: String
+    abstract val sessionId: String
+    abstract val timestamp: String
+
+    data class SessionStatusChanged(
+        override val eventId: String,
+        override val sessionId: String,
+        override val timestamp: String,
+        val status: String,
+    ) : ChatEvent()
+
+    data class UserMessage(
+        override val eventId: String,
+        override val sessionId: String,
+        override val timestamp: String,
+        val text: String,
+    ) : ChatEvent()
+
+    data class AssistantMessage(
+        override val eventId: String,
+        override val sessionId: String,
+        override val timestamp: String,
+        val text: String,
+        val delta: Boolean,
+    ) : ChatEvent()
+
+    data class AssistantStatus(
+        override val eventId: String,
+        override val sessionId: String,
+        override val timestamp: String,
+        val status: String,
+    ) : ChatEvent()
+
+    data class AgentCompleted(
+        override val eventId: String,
+        override val sessionId: String,
+        override val timestamp: String,
+        val reason: String?,
+    ) : ChatEvent()
+
+    data class AgentFailed(
+        override val eventId: String,
+        override val sessionId: String,
+        override val timestamp: String,
+        val reason: String?,
+    ) : ChatEvent()
+
+    data class AgentInterrupted(
+        override val eventId: String,
+        override val sessionId: String,
+        override val timestamp: String,
+        val reason: String?,
+    ) : ChatEvent()
+}
+
 sealed class IncomingRemoteFrame {
     data class AuthChallenge(val nonce: String) : IncomingRemoteFrame()
 
@@ -78,6 +134,16 @@ object RemoteProtocol {
     const val P256_COORDINATE_BYTES = 32
     const val JS_MAX_SAFE_INTEGER = 9007199254740991L
     val SESSION_STATUSES = setOf("idle", "running", "waiting_approval", "waiting_user", "completed", "failed", "interrupted", "disconnected")
+    val CHAT_EVENT_TYPES =
+        setOf(
+            "session.status_changed",
+            "user.message",
+            "assistant.message",
+            "assistant.status",
+            "agent.completed",
+            "agent.failed",
+            "agent.interrupted",
+        )
 
     fun parsePairingQrPayload(
         text: String,
@@ -301,6 +367,75 @@ object RemoteProtocol {
         return buildJsonObject { put("remoteSessionId", remoteSessionId) }
     }
 
+    fun sessionSendPayload(text: String): JsonObject = buildJsonObject { put("text", text) }
+
+    fun sessionCancelPayload(): JsonObject = buildJsonObject {}
+
+    fun parseChatEvent(event: RemoteEvent): ChatEvent? {
+        if (event.type !in CHAT_EVENT_TYPES) {
+            return null
+        }
+        val sessionId = event.sessionId
+        if (sessionId.isNullOrEmpty()) {
+            throw ProtocolParseError("sessionId must be a non-empty string.")
+        }
+        return when (event.type) {
+            "session.status_changed" ->
+                ChatEvent.SessionStatusChanged(
+                    eventId = event.eventId,
+                    sessionId = sessionId,
+                    timestamp = event.timestamp,
+                    status = parseSessionStatusChangedPayload(event.payload),
+                )
+            "user.message" ->
+                ChatEvent.UserMessage(
+                    eventId = event.eventId,
+                    sessionId = sessionId,
+                    timestamp = event.timestamp,
+                    text = parseUserMessagePayload(event.payload),
+                )
+            "assistant.message" -> {
+                val parsed = parseAssistantMessagePayload(event.payload)
+                ChatEvent.AssistantMessage(
+                    eventId = event.eventId,
+                    sessionId = sessionId,
+                    timestamp = event.timestamp,
+                    text = parsed.first,
+                    delta = parsed.second,
+                )
+            }
+            "assistant.status" ->
+                ChatEvent.AssistantStatus(
+                    eventId = event.eventId,
+                    sessionId = sessionId,
+                    timestamp = event.timestamp,
+                    status = parseAssistantStatusPayload(event.payload),
+                )
+            "agent.completed" ->
+                ChatEvent.AgentCompleted(
+                    eventId = event.eventId,
+                    sessionId = sessionId,
+                    timestamp = event.timestamp,
+                    reason = parseAgentTerminalPayload(event.payload),
+                )
+            "agent.failed" ->
+                ChatEvent.AgentFailed(
+                    eventId = event.eventId,
+                    sessionId = sessionId,
+                    timestamp = event.timestamp,
+                    reason = parseAgentTerminalPayload(event.payload),
+                )
+            "agent.interrupted" ->
+                ChatEvent.AgentInterrupted(
+                    eventId = event.eventId,
+                    sessionId = sessionId,
+                    timestamp = event.timestamp,
+                    reason = parseAgentTerminalPayload(event.payload),
+                )
+            else -> null
+        }
+    }
+
     fun parseDeviceIdValue(value: JsonElement?): String {
         val root = parseObject(value ?: throw ProtocolParseError("deviceId must be a non-empty string."), "value")
         return requireNonEmptyString(root, "deviceId")
@@ -373,13 +508,45 @@ object RemoteProtocol {
             "workspace.updated" -> parseWorkspace(payload)
             "session.created", "session.loaded" -> parseSession(payload)
         }
-        return RemoteEvent(
-            eventId = requireNonEmptyString(root, "eventId"),
-            sessionId = requireNullableString(root, "sessionId"),
-            timestamp = requireNonEmptyString(root, "timestamp"),
-            type = type,
-            payload = payload,
-        )
+        val event =
+            RemoteEvent(
+                eventId = requireNonEmptyString(root, "eventId"),
+                sessionId = requireNullableString(root, "sessionId"),
+                timestamp = requireNonEmptyString(root, "timestamp"),
+                type = type,
+                payload = payload,
+            )
+        parseChatEvent(event)
+        return event
+    }
+
+    private fun parseSessionStatusChangedPayload(payload: JsonElement): String {
+        val root = parseObject(payload, "session.status_changed")
+        val status = requireNonEmptyString(root, "status")
+        if (status !in SESSION_STATUSES) {
+            throw ProtocolParseError("status must be a known session status.")
+        }
+        return status
+    }
+
+    private fun parseUserMessagePayload(payload: JsonElement): String {
+        val root = parseObject(payload, "user.message")
+        return requireStringField(root, "text")
+    }
+
+    private fun parseAssistantMessagePayload(payload: JsonElement): Pair<String, Boolean> {
+        val root = parseObject(payload, "assistant.message")
+        return requireStringField(root, "text") to requireBoolean(root, "delta")
+    }
+
+    private fun parseAssistantStatusPayload(payload: JsonElement): String {
+        val root = parseObject(payload, "assistant.status")
+        return requireNonEmptyString(root, "status")
+    }
+
+    private fun parseAgentTerminalPayload(payload: JsonElement): String? {
+        val root = parseObject(payload, "agent terminal")
+        return requireNullableString(root, "reason")
     }
 
     private fun parseResultRecord(value: JsonObject): RemoteCommandResult {
@@ -458,6 +625,17 @@ object RemoteProtocol {
         val value = root[key] as? JsonPrimitive
         if (value == null || !value.isString || value.content.isEmpty()) {
             throw ProtocolParseError("$key must be a non-empty string.")
+        }
+        return value.content
+    }
+
+    private fun requireStringField(
+        root: JsonObject,
+        key: String,
+    ): String {
+        val value = root[key] as? JsonPrimitive
+        if (value == null || !value.isString) {
+            throw ProtocolParseError("$key must be a string.")
         }
         return value.content
     }

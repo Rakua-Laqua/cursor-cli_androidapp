@@ -4,6 +4,7 @@ import dev.cursorremote.android.data.protocol.IncomingRemoteFrame
 import dev.cursorremote.android.data.protocol.PairingQrPayload
 import dev.cursorremote.android.data.protocol.ProtocolParseError
 import dev.cursorremote.android.data.protocol.RemoteCommandResult
+import dev.cursorremote.android.data.protocol.RemoteEvent
 import dev.cursorremote.android.data.protocol.RemoteProtocol
 import dev.cursorremote.android.data.protocol.SessionInfo
 import dev.cursorremote.android.data.protocol.WorkspaceInfo
@@ -20,8 +21,11 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -54,8 +58,10 @@ class RemoteRepository(
     private val pending = ConcurrentHashMap<String, CompletableDeferred<RemoteCommandResult>>()
     private val challengeDeferred = AtomicReference<CompletableDeferred<String>?>(null)
     private val _connectionState = MutableStateFlow(RemoteConnectionState.Disconnected)
+    private val _events = MutableSharedFlow<RemoteEvent>(extraBufferCapacity = 64)
     val connectionState: StateFlow<RemoteConnectionState> = _connectionState.asStateFlow()
     val socketConnectionState: StateFlow<ConnectionState> = transport.connectionState
+    val events: SharedFlow<RemoteEvent> = _events.asSharedFlow()
 
     init {
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
@@ -93,6 +99,14 @@ class RemoteRepository(
         val value = sendCommand("session.load", RemoteProtocol.sessionLoadPayload(remoteSessionId))
             ?: throw RemoteRepositoryException("session.load value must be a session.")
         return RemoteProtocol.parseSession(value)
+    }
+
+    suspend fun sendSessionPrompt(sessionId: String, text: String) {
+        sendCommand("session.send", RemoteProtocol.sessionSendPayload(text), sessionId, timeoutMs = null)
+    }
+
+    suspend fun cancelSession(sessionId: String) {
+        sendCommand("session.cancel", RemoteProtocol.sessionCancelPayload(), sessionId, timeoutMs = requestTimeoutMs)
     }
 
     fun disconnect() {
@@ -170,6 +184,8 @@ class RemoteRepository(
     private suspend fun sendCommand(
         type: String,
         payload: JsonObject,
+        sessionId: String? = null,
+        timeoutMs: Long? = requestTimeoutMs,
     ): JsonElement? {
         if (_connectionState.value != RemoteConnectionState.Ready) {
             throw RemoteRepositoryException("Not authenticated")
@@ -179,9 +195,9 @@ class RemoteRepository(
         pending[requestId] = deferred
         sendOrThrow(
             requestId,
-            RemoteProtocol.encodeCommandFrame(requestId, type, payload, nowTimestamp(), sessionId = null),
+            RemoteProtocol.encodeCommandFrame(requestId, type, payload, nowTimestamp(), sessionId),
         )
-        return awaitRegistered(requestId, deferred, failAuthentication = false)
+        return awaitRegistered(requestId, deferred, failAuthentication = false, timeoutMs = timeoutMs)
     }
 
     private suspend fun sendOrThrow(
@@ -210,10 +226,15 @@ class RemoteRepository(
         requestId: String,
         deferred: CompletableDeferred<RemoteCommandResult>,
         failAuthentication: Boolean,
+        timeoutMs: Long? = requestTimeoutMs,
     ): JsonElement? {
         val result =
             try {
-                withTimeout(requestTimeoutMs) { deferred.await() }
+                if (timeoutMs == null) {
+                    deferred.await()
+                } else {
+                    withTimeout(timeoutMs) { deferred.await() }
+                }
             } catch (_: TimeoutCancellationException) {
                 pending.remove(requestId)
                 val message = if (failAuthentication) "Authentication timed out" else "Request timed out"
@@ -234,7 +255,7 @@ class RemoteRepository(
         return result.value
     }
 
-    private fun dispatch(text: String) {
+    private suspend fun dispatch(text: String) {
         val frame =
             try {
                 RemoteProtocol.parseIncomingFrame(text)
@@ -250,7 +271,7 @@ class RemoteRepository(
                 challengeDeferred.getAndSet(null)?.complete(frame.nonce)
             }
             is IncomingRemoteFrame.Result -> pending.remove(frame.result.requestId)?.complete(frame.result)
-            is IncomingRemoteFrame.Event -> Unit
+            is IncomingRemoteFrame.Event -> _events.emit(frame.event)
         }
     }
 
