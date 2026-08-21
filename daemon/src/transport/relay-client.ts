@@ -1,13 +1,15 @@
 import { createRequire } from 'node:module';
 
 import {
-  parseRemoteFrame,
+  parseTransportFrame,
   remoteCommandFailure,
   remoteCommandSuccess,
-  serializeRemoteFrame,
+  sanitizeRemoteErrorMessage,
+  serializeTransportFrame,
   type JsonValue,
+  type PairingVerifyFrame,
   type RemoteCommand,
-  type RemoteFrame,
+  type TransportFrame,
 } from '@cursor-remote/protocol';
 
 import type { Daemon } from '../daemon.js';
@@ -40,6 +42,7 @@ export class DaemonRelayConnection {
     private readonly daemon: Daemon,
     private readonly socket: DaemonSocket,
     private readonly stopEvents: () => void,
+    private readonly machineId: string,
   ) {
     socket.on('message', (data, isBinary) => {
       this.onMessage(data, isBinary);
@@ -53,14 +56,15 @@ export class DaemonRelayConnection {
   }
 
   static async connect(daemon: Daemon, url: string): Promise<DaemonRelayConnection> {
+    const machineId = readMachineId(url);
     const socket = new WebSocket(url);
     const stopEvents = daemon.onEvent((event) => {
       if (socket.readyState !== WebSocket.OPEN) {
         return;
       }
-      socket.send(serializeRemoteFrame({ kind: 'event', event }));
+      socket.send(serializeTransportFrame({ kind: 'event', event }));
     });
-    const connection = new DaemonRelayConnection(daemon, socket, stopEvents);
+    const connection = new DaemonRelayConnection(daemon, socket, stopEvents, machineId);
     try {
       await waitForOpen(socket);
     } catch (error) {
@@ -95,16 +99,66 @@ export class DaemonRelayConnection {
       return;
     }
 
-    let frame: RemoteFrame;
+    let frame: TransportFrame;
     try {
-      frame = parseRemoteFrame(text);
+      frame = parseTransportFrame(text);
     } catch {
+      return;
+    }
+    if (frame.kind === 'pairing_verify') {
+      this.dispatchPairingVerify(frame);
       return;
     }
     if (frame.kind !== 'command') {
       return;
     }
     void this.dispatch(frame.command);
+  }
+
+  private dispatchPairingVerify(frame: PairingVerifyFrame): void {
+    if (frame.machineId !== this.machineId) {
+      this.sendFrame({
+        kind: 'pairing_result',
+        verificationId: frame.verificationId,
+        ok: false,
+        deviceId: null,
+        error: 'Machine mismatch',
+      });
+      return;
+    }
+
+    try {
+      const deviceId =
+        frame.operation === 'pair'
+          ? this.daemon.pairing.verifyPair({
+              machineId: this.machineId,
+              nonce: frame.nonce,
+              token: frame.token,
+              publicKey: frame.publicKey,
+              signature: frame.signature,
+            }).deviceId
+          : this.daemon.pairing.verifyAuth({
+              machineId: this.machineId,
+              nonce: frame.nonce,
+              deviceId: frame.deviceId,
+              signature: frame.signature,
+            }).deviceId;
+      this.sendFrame({
+        kind: 'pairing_result',
+        verificationId: frame.verificationId,
+        ok: true,
+        deviceId,
+        error: null,
+      });
+    } catch (error) {
+      this.sendFrame({
+        kind: 'pairing_result',
+        verificationId: frame.verificationId,
+        ok: false,
+        deviceId: null,
+        error: sanitizeRemoteErrorMessage(error),
+      });
+    }
   }
 
   private async dispatch(command: RemoteCommand): Promise<void> {
@@ -122,11 +176,11 @@ export class DaemonRelayConnection {
     }
   }
 
-  private sendFrame(frame: RemoteFrame): void {
+  private sendFrame(frame: TransportFrame): void {
     if (this.socket.readyState !== WebSocket.OPEN) {
       return;
     }
-    this.socket.send(serializeRemoteFrame(frame));
+    this.socket.send(serializeTransportFrame(frame));
   }
 }
 
@@ -135,6 +189,20 @@ export async function attachDaemonToRelay(
   url: string,
 ): Promise<DaemonRelayConnection> {
   return DaemonRelayConnection.connect(daemon, url);
+}
+
+function readMachineId(url: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error('Invalid machine URL');
+  }
+  const machineId = parsed.searchParams.get('machineId');
+  if (machineId === null || machineId.length === 0) {
+    throw new Error('machineId is required');
+  }
+  return machineId;
 }
 
 function toJsonValue(value: unknown): JsonValue | null {

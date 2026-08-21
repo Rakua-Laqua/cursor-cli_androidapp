@@ -37,4 +37,6 @@ npm run remote-dev -- --state-dir ./runtime-data --allowed-root <workspace> sess
 npm run remote-dev -- --state-dir ./runtime-data --allowed-root <workspace> session load <sessionId>
 ```
 
-`--acp-command` を省略すると実 Cursor CLI の ACP を解決します。Cursor Desktop は不要です。Relay と Android の実データフローは Phase 2 です。
+`--acp-command` を省略すると実 Cursor CLI の ACP を解決します。Cursor Desktop は不要です。
+
+v1.3.0 から `attachDaemonToRelay` で localhost Relay へ outbound 接続できます。v1.4.0 は Device Pairing の `PairingManager` を含みます。`remote-dev` 自体は in-process の信頼経路のまま Relay を通りません。QR 表示 CLI と Android 実データフローはまだありません。進捗は `docs/implementation_status.md` を見てください。

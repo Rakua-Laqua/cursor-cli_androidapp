@@ -9,6 +9,7 @@ import type {
 
 import { AcpProcess, type AcpProcessLogger, type AcpProcessOptions } from './acp/process.js';
 import { resolveAcpCommand } from './acp/resolve-command.js';
+import { PairingManager } from './pairing/pairing-manager.js';
 import { AcpSessionAdapter } from './session/session-adapter.js';
 import { METADATA_FILE_NAME, MetadataStore } from './store/metadata-store.js';
 import { WorkspaceManager, type WorkspaceManagerOptions } from './workspace/workspace-manager.js';
@@ -35,6 +36,7 @@ export class Daemon {
     private readonly acpProcess: AcpProcess,
     private readonly sessionAdapter: AcpSessionAdapter,
     private readonly workspaceManager: WorkspaceManager,
+    private readonly pairingManager: PairingManager,
   ) {}
 
   static async start(options: DaemonStartOptions = {}): Promise<Daemon> {
@@ -75,6 +77,7 @@ export class Daemon {
         acpProcess,
         new AcpSessionAdapter(acpProcess, workspaceManager, store),
         workspaceManager,
+        new PairingManager(store),
       );
     } catch (error) {
       await acpProcess.shutdown();
@@ -92,6 +95,10 @@ export class Daemon {
 
   get workspaces(): WorkspaceManager {
     return this.workspaceManager;
+  }
+
+  get pairing(): PairingManager {
+    return this.pairingManager;
   }
 
   onEvent(listener: (event: KnownRemoteEvent) => void): () => void {

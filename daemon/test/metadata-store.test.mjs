@@ -5,11 +5,17 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { parseRemoteCommand, serializeCommand } from '@cursor-remote/protocol';
+import {
+  deviceIdFromPublicKey,
+  generateP256KeyPair,
+  parseRemoteCommand,
+  serializeCommand,
+} from '@cursor-remote/protocol';
 
 import {
   Daemon,
   METADATA_FILE_NAME,
+  MetadataStore,
   MetadataStoreError,
   WorkspaceNotFoundError,
   WorkspacePathError,
@@ -334,4 +340,74 @@ test('invalid allowedRoot does not spawn an ACP child', async () => {
     WorkspacePathError,
   );
   assert.equal(fs.existsSync(markerPath), false);
+});
+
+test('v1 metadata without devices remains readable and can persist public devices', () => {
+  const stateDir = makeRoot();
+  const allowedRoot = makeRoot();
+  const project = path.join(allowedRoot, 'app');
+  fs.mkdirSync(project);
+  const filePath = path.join(stateDir, METADATA_FILE_NAME);
+  const workspaceId = 'ws-legacy';
+  fs.writeFileSync(
+    filePath,
+    JSON.stringify({
+      version: 1,
+      workspaces: [
+        {
+          workspaceId,
+          path: fs.realpathSync(project),
+          name: 'app',
+          lastUsedAt: null,
+        },
+      ],
+      sessions: [],
+    }),
+  );
+
+  const store = new MetadataStore(filePath);
+  assert.equal(store.getWorkspaces().length, 1);
+  assert.equal(store.getWorkspaces()[0].workspaceId, workspaceId);
+  assert.deepEqual(store.getDevices(), []);
+
+  const keys = generateP256KeyPair();
+  const deviceId = deviceIdFromPublicKey(keys.publicKey);
+  store.writeDevices([
+    {
+      deviceId,
+      publicKey: keys.publicKey,
+      createdAt: '2026-08-17T00:00:00.000Z',
+    },
+  ]);
+  const raw = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  assert.equal(raw.version, 1);
+  assert.equal(raw.workspaces[0].workspaceId, workspaceId);
+  assert.equal(raw.devices.length, 1);
+  assert.equal(raw.devices[0].deviceId, deviceId);
+  assert.equal('d' in raw.devices[0].publicKey, false);
+  assert.equal(JSON.stringify(raw).includes(keys.privateKey.d), false);
+
+  const reread = new MetadataStore(filePath);
+  assert.equal(reread.getWorkspaces()[0].workspaceId, workspaceId);
+  assert.equal(reread.getDevices()[0].deviceId, deviceId);
+  assert.deepEqual(reread.getDevices()[0].publicKey, keys.publicKey);
+
+  fs.writeFileSync(
+    filePath,
+    JSON.stringify({
+      version: 1,
+      workspaces: raw.workspaces,
+      sessions: raw.sessions,
+      devices: [
+        {
+          deviceId: 'not-the-canonical-device-id',
+          publicKey: keys.publicKey,
+          createdAt: '2026-08-17T00:00:00.000Z',
+        },
+      ],
+    }),
+  );
+  const dropped = new MetadataStore(filePath);
+  assert.equal(dropped.getWorkspaces()[0].workspaceId, workspaceId);
+  assert.deepEqual(dropped.getDevices(), []);
 });

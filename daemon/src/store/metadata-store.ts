@@ -8,7 +8,12 @@ import {
 } from 'node:fs';
 import { dirname } from 'node:path';
 
-import type { SessionStatus } from '@cursor-remote/protocol';
+import {
+  deviceIdFromPublicKey,
+  parseP256PublicJwk,
+  type P256PublicJwk,
+  type SessionStatus,
+} from '@cursor-remote/protocol';
 
 export const METADATA_STORE_VERSION = 1;
 export const METADATA_FILE_NAME = 'metadata.json';
@@ -39,6 +44,12 @@ export interface PersistedSession {
   readonly selectedModelId: string | null;
 }
 
+export interface PersistedDevice {
+  readonly deviceId: string;
+  readonly publicKey: P256PublicJwk;
+  readonly createdAt: string;
+}
+
 const SESSION_STATUSES: ReadonlySet<string> = new Set([
   'idle',
   'running',
@@ -53,6 +64,7 @@ const SESSION_STATUSES: ReadonlySet<string> = new Set([
 export class MetadataStore {
   private workspaces: PersistedWorkspace[] = [];
   private sessions: PersistedSession[] = [];
+  private devices: PersistedDevice[] = [];
 
   constructor(private readonly filePath: string | undefined) {
     if (this.filePath !== undefined) {
@@ -66,6 +78,10 @@ export class MetadataStore {
 
   getSessions(): readonly PersistedSession[] {
     return this.sessions;
+  }
+
+  getDevices(): readonly PersistedDevice[] {
+    return this.devices;
   }
 
   writeWorkspaces(workspaces: readonly PersistedWorkspace[]): void {
@@ -82,6 +98,11 @@ export class MetadataStore {
     const currentIds = new Set(sessions.map((session) => session.remoteSessionId));
     const preserved = this.sessions.filter((session) => !currentIds.has(session.remoteSessionId));
     this.sessions = [...sessions, ...preserved];
+    this.flush();
+  }
+
+  writeDevices(devices: readonly PersistedDevice[]): void {
+    this.devices = [...devices];
     this.flush();
   }
 
@@ -116,6 +137,12 @@ export class MetadataStore {
           return session === undefined ? [] : [session];
         })
       : [];
+    this.devices = Array.isArray(parsed.devices)
+      ? parsed.devices.flatMap((item) => {
+          const device = parsePersistedDevice(item);
+          return device === undefined ? [] : [device];
+        })
+      : [];
   }
 
   private flush(): void {
@@ -128,6 +155,7 @@ export class MetadataStore {
         version: METADATA_STORE_VERSION,
         workspaces: this.workspaces,
         sessions: this.sessions,
+        devices: this.devices,
       }),
     );
   }
@@ -164,6 +192,30 @@ function parsePersistedWorkspace(value: unknown): PersistedWorkspace | undefined
     return undefined;
   }
   return { workspaceId, path, name, lastUsedAt };
+}
+
+function parsePersistedDevice(value: unknown): PersistedDevice | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const deviceId = readNonEmptyString(value.deviceId);
+  const createdAt = readNonEmptyString(value.createdAt);
+  if (deviceId === undefined || createdAt === undefined) {
+    return undefined;
+  }
+  try {
+    const publicKey = parseP256PublicJwk(value.publicKey);
+    if (deviceId !== deviceIdFromPublicKey(publicKey)) {
+      return undefined;
+    }
+    return {
+      deviceId,
+      publicKey,
+      createdAt,
+    };
+  } catch {
+    return undefined;
+  }
 }
 
 function parsePersistedSession(value: unknown): PersistedSession | undefined {

@@ -1,5 +1,21 @@
 # CHANGELOG
 
+## [1.4.0] - 2026-08-21
+
+### 追加
+
+- Device Pairing のバックエンドを追加した。PC 側は Pairing 用 QR JSON（`relayUrl`、`machineId`、one-use `token`、`expiresAt`）を発行できる。token は1回の成功した pair で消費し、再利用できない。Android の QR スキャンと Keystore は未実装。
+- ECDSA P-256 の `pair` / `auth_proof` で初回登録と再接続を検証する。公開 device metadata（`deviceId` と公開鍵）は Daemon の `metadata.json` に永続化する。秘密鍵は Daemon に保存しない。再起動後も登録済み公開鍵で再認証できる。
+- Relay の `/client` は認証ゲートになる。未 Pairing の Command は Machine に届かず、Event は認証済み client にだけ送る。失敗後および Machine 切断・置換後は再 challenge / 再認証が必要になる。
+
+### セキュリティ
+
+- `/client` は pairing 済み device だけが Command / Event を扱える。`/machine` 認証、TLS、インターネット公開対応は未実装である。localhost の非認証 `ws://` のまま Relay をインターネットへ公開しない。
+
+### テスト
+
+- QR payload、P-256 pair/auth proof、token の one-use、未 pairing の Command / Event 遮断、再 challenge / 再認証、public device 永続化を Protocol / Daemon / Relay のテストで検証した。
+
 ## [1.3.0] - 2026-08-17
 
 ### 追加

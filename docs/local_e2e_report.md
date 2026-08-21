@@ -1,6 +1,6 @@
 # Local E2E Report
 
-- 文書バージョン: v0.2
+- 文書バージョン: v0.3
 - 対象タスク: TASK-105
 - 確認日: 2026-08-17
 - 対象設計書: `docs/cursor_remote_android_spec_v0.3.md`
@@ -124,4 +124,6 @@ npm run remote-dev -- e2e --acp-command node --acp-arg test/fixtures/mock-acp.mj
 
 ## 7. Gate
 
-実装計画の Gate A（TASK-105 Local E2E が成功するまで Android 実装へ進まない）について、**実 Cursor CLI 経路は 2026-08-17 に通過した。** Phase 1 の一連操作は PC 上の Local Daemon だけで確認済み。Phase 2（Relay / Android）は未着手である。
+実装計画の Gate A（TASK-105 Local E2E が成功するまで Android 実装へ進まない）について、**実 Cursor CLI 経路は 2026-08-17 に通過した。** Phase 1 の一連操作は PC 上の Local Daemon だけで確認済み。この確認自体は Relay / Android を含まない。
+
+Phase 2 以降の進捗は `docs/implementation_status.md` を正本とする。

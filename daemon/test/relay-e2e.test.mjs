@@ -5,7 +5,14 @@ import path from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
 
-import { parseRemoteFrame, serializeRemoteFrame } from '@cursor-remote/protocol';
+import {
+  generateP256KeyPair,
+  parseTransportFrame,
+  serializeRemoteFrame,
+  serializeTransportFrame,
+  signAuthProof,
+  signPairProof,
+} from '@cursor-remote/protocol';
 import { WebSocket } from 'ws';
 
 import { attachDaemonToRelay, Daemon } from '../dist/index.js';
@@ -21,13 +28,19 @@ function mockLaunch() {
   };
 }
 
-async function openWs(url) {
+async function openClient(url) {
   const socket = new WebSocket(url);
+  const frames = [];
+  socket.on('message', (data, isBinary) => {
+    if (!isBinary) {
+      frames.push(parseTransportFrame(String(data)));
+    }
+  });
   await new Promise((resolve, reject) => {
     socket.once('open', resolve);
     socket.once('error', reject);
   });
-  return socket;
+  return { socket, frames };
 }
 
 async function closeWs(socket) {
@@ -42,14 +55,8 @@ async function closeWs(socket) {
   });
 }
 
-function collectFrames(socket) {
-  const frames = [];
-  socket.on('message', (data, isBinary) => {
-    if (!isBinary) {
-      frames.push(parseRemoteFrame(String(data)));
-    }
-  });
-  return frames;
+function lastKind(frames, kind) {
+  return [...frames].reverse().find((frame) => frame.kind === kind);
 }
 
 async function waitUntil(predicate, timeoutMs = 4000) {
@@ -89,6 +96,56 @@ async function rpc(socket, frames, type, payload, sessionId = null) {
   return frame.result.value;
 }
 
+async function pairDevice(socket, frames, qr, keys, machineId) {
+  await waitUntil(() => frames.some((frame) => frame.kind === 'auth_challenge'));
+  const challenge = lastKind(frames, 'auth_challenge');
+  commandSeq += 1;
+  const requestId = `req-${commandSeq}-pair`;
+  socket.send(
+    serializeTransportFrame({
+      kind: 'pair',
+      requestId,
+      token: qr.token,
+      publicKey: keys.publicKey,
+      signature: signPairProof(keys.privateKey, {
+        machineId,
+        nonce: challenge.nonce,
+        token: qr.token,
+        publicKey: keys.publicKey,
+      }),
+    }),
+  );
+  const frame = await waitForResult(frames, requestId);
+  if (!frame.result.ok) {
+    throw new Error(frame.result.error ?? 'pair failed');
+  }
+  return frame.result.value.deviceId;
+}
+
+async function authDevice(socket, frames, keys, machineId, deviceId) {
+  await waitUntil(() => frames.some((frame) => frame.kind === 'auth_challenge'));
+  const challenge = lastKind(frames, 'auth_challenge');
+  commandSeq += 1;
+  const requestId = `req-${commandSeq}-auth`;
+  socket.send(
+    serializeTransportFrame({
+      kind: 'auth_proof',
+      requestId,
+      deviceId,
+      signature: signAuthProof(keys.privateKey, {
+        machineId,
+        nonce: challenge.nonce,
+        deviceId,
+      }),
+    }),
+  );
+  const frame = await waitForResult(frames, requestId);
+  if (!frame.result.ok) {
+    throw new Error(frame.result.error ?? 'auth failed');
+  }
+  return frame.result.value.deviceId;
+}
+
 function eventsFrom(frames, startIndex) {
   return frames
     .slice(startIndex)
@@ -123,8 +180,10 @@ test('websocket mock ACP e2e: commands, streaming, cancel, restart, continuation
   t.after(() => server.close());
 
   const machineId = 'pc-e2e';
-  const client = await openWs(server.clientUrl(machineId));
-  const frames = collectFrames(client);
+  const keys = generateP256KeyPair();
+  const opened = await openClient(server.clientUrl(machineId));
+  const client = opened.socket;
+  const frames = opened.frames;
   t.after(() => closeWs(client));
 
   async function startAttachedDaemon() {
@@ -148,7 +207,17 @@ test('websocket mock ACP e2e: commands, streaming, cancel, restart, continuation
   const first = await startAttachedDaemon();
   let workspaceId;
   let remoteSessionId;
+  let deviceId;
+  let challengeCountBeforeStop = 0;
   try {
+    const qr = first.daemon.pairing.createQrPayload({
+      relayUrl: `ws://127.0.0.1:${server.port}`,
+      machineId,
+    });
+    deviceId = await pairDevice(client, frames, qr, keys, machineId);
+    assert.equal(typeof deviceId, 'string');
+    assert.ok(deviceId.length > 0);
+
     const registered = await rpc(client, frames, 'workspace.register', { path: workspacePath });
     workspaceId = registered.workspaceId;
     const workspaces = await rpc(client, frames, 'workspace.list', {});
@@ -190,12 +259,21 @@ test('websocket mock ACP e2e: commands, streaming, cancel, restart, continuation
       eventsFrom(frames, cancelStart).some((event) => event.type === 'agent.interrupted'),
       true,
     );
+    challengeCountBeforeStop = frames.filter((frame) => frame.kind === 'auth_challenge').length;
   } finally {
     await stopAttached(first);
   }
 
+  await waitUntil(
+    () =>
+      frames.filter((frame) => frame.kind === 'auth_challenge').length > challengeCountBeforeStop,
+  );
+
   const second = await startAttachedDaemon();
   try {
+    const authenticated = await authDevice(client, frames, keys, machineId, deviceId);
+    assert.equal(authenticated, deviceId);
+
     const listed = await rpc(client, frames, 'session.list', { workspaceId });
     assert.equal(
       listed.some((session) => session.remoteSessionId === remoteSessionId),

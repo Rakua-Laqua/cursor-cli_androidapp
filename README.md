@@ -1,14 +1,14 @@
 # Cursor CLI Remote for Android
 
-Android から PC 上の Cursor CLI / ACP セッションを操作するためのクライアント群です。設計の Source of Truth は `docs/cursor_remote_android_spec_v0.3.md`、実装順序は `docs/implementation_plan_grok_4.6.md` です。
+Android から PC 上の Cursor CLI / ACP セッションを操作するためのクライアント群です。設計の Source of Truth は `docs/cursor_remote_android_spec_v0.3.md`、実装順序は `docs/implementation_plan_grok_4.6.md`、現時点の進捗は `docs/implementation_status.md` です。
 
 ## Repository layout
 
 - `android/` — Android ネイティブクライアント。Phase 0 では build 可能な Jetpack Compose 最小アプリのみを保持します。
-- `daemon/` — PC 上で動作する Local Daemon。Phase 1 の ACP / Workspace / Session / metadata と、簡易クライアント `remote-dev` を含みます。
-- `relay/` — Android と Daemon を中継する Relay Server。WebSocket 実装は Phase 2 で追加します。
+- `daemon/` — PC 上で動作する Local Daemon。Phase 1 の ACP / Workspace / Session / metadata と、簡易クライアント `remote-dev`、Relay outbound、Device Pairing バックエンドを含みます。
+- `relay/` — Android と Daemon を中継する Relay Server。v1.4.0 で localhost WebSocket core と `/client` 認証ゲートを持ちます。
 - `protocol/` — Android 向け Remote Protocol の共有 TypeScript 型と安全な JSON 境界処理です。
-- `docs/` — 仕様書、実装計画、Capability 実測結果、Local E2E 確認記録を保持します。
+- `docs/` — 仕様書、実装計画、進捗スナップショット、Capability 実測結果、Local E2E 確認記録を保持します。
 
 ## Requirements
 
@@ -73,4 +73,6 @@ Phase 0 の Android アプリは起動確認用の最小 Compose 画面だけを
 
 ## Phase boundary
 
-Phase 1 の Local Daemon / ACP / Workspace / Session / metadata / Local E2E は `remote-dev` で固定します。実機の Cursor CLI / ACP Capability は `docs/acp_capability_report.md`、TASK-105 の一連確認は `docs/local_e2e_report.md` に記録済みです。未観測の機能を存在する前提で実装しないという拘束は維持します。Relay と Android の実データフローは Phase 2 です。
+Phase 1 の Local Daemon / ACP / Workspace / Session / metadata / Local E2E は `remote-dev` で固定します。実機の Cursor CLI / ACP Capability は `docs/acp_capability_report.md`、TASK-105 の一連確認は `docs/local_e2e_report.md` に記録済みです。未観測の機能を存在する前提で実装しないという拘束は維持します。
+
+Phase 2 の TASK-200 は v1.3.0、TASK-201 Device Pairing バックエンドは v1.4.0 です。詳細は `CHANGELOG.md` と `docs/implementation_status.md` を見てください。Android 実データフローは TASK-202 以降です。

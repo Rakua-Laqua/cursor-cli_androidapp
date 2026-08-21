@@ -1,10 +1,13 @@
 # Cursor CLI Remote for Android — Grok 4.6向け実装計画
 
-- 文書バージョン: v0.1
+- 文書バージョン: v0.2
 - 対象設計書: `docs/cursor_remote_android_spec_v0.3.md`
 - 実装モデル: Grok 4.6
 - 開発方針: 縦切り・検証可能・Phase境界厳守
 - 対象リポジトリ: `Rakua-Laqua/cursor-cli_androidapp`
+- 進捗スナップショット: `docs/implementation_status.md`（2026-08-21 時点）
+
+この計画書は作業順と Scope の正本である。各タスクの「いま完了しているか」は進捗スナップショットを見る。計画本文の未着手タスクは消さない。
 
 ---
 
@@ -357,6 +360,8 @@ workspace select
 
 # Phase 2 — Relay + Android Text Remote
 
+2026-08-21 時点: TASK-200 は v1.3.0、TASK-201 は v1.4.0 でリリース済み。TASK-202 以降は未着手。詳細は `docs/implementation_status.md`。Gate B〜D は維持する。
+
 ## TASK-200: Relay WebSocket Core
 
 ### Scope
@@ -384,6 +389,10 @@ AndroidとDaemon間の中継だけを実装する。
 
 Local E2E Harness相当のCommandをWebSocket越しに実行できる。
 
+### 実施記録
+
+2026-08-17、v1.3.0 でリリース。localhost の非認証 `ws://` core。`/machine` outbound と `/client` inbound、`command` / `event` / `result` の相関、heartbeat、切断・置換。Pairing / TLS / Android は含まない。
+
 ---
 
 ## TASK-201: Device Pairing
@@ -408,6 +417,10 @@ Daemon
 - 使い捨てtoken。
 - token再利用不可。
 - 未Pairing端末からCommand送信不可。
+
+### 実施記録
+
+2026-08-21、v1.4.0 でリリース。Protocol / Daemon / Relay のバックエンド。QR JSON、P-256 証明、`/client` 認証ゲート、public device の metadata 永続化。Android QR / Keystore / TLS / `/machine` 認証 / インターネット公開対応は含まない。次は TASK-202。
 
 ---
 

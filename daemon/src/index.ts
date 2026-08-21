@@ -2,6 +2,15 @@ import { EVENT_TYPES } from '@cursor-remote/protocol';
 
 export { Daemon, type DaemonAcpOptions, type DaemonStartOptions } from './daemon.js';
 export { attachDaemonToRelay, DaemonRelayConnection } from './transport/relay-client.js';
+export {
+  DEFAULT_PAIRING_TOKEN_TTL_MS,
+  PairingError,
+  PairingManager,
+  type AuthVerificationInput,
+  type CreatedPairingToken,
+  type PairingManagerOptions,
+  type PairVerificationInput,
+} from './pairing/pairing-manager.js';
 export { AcpSessionAdapter, type CreateSessionInput } from './session/session-adapter.js';
 export { mapAcpSessionUpdate, type MappedSessionEvent } from './session/map-session-update.js';
 export {
@@ -24,6 +33,7 @@ export {
   METADATA_STORE_VERSION,
   MetadataStore,
   MetadataStoreError,
+  type PersistedDevice,
   type PersistedSession,
   type PersistedWorkspace,
 } from './store/metadata-store.js';
