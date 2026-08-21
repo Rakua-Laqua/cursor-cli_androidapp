@@ -7,7 +7,7 @@
 - 対象リポジトリ: `Rakua-Laqua/cursor-cli_androidapp`
 - ブランチ: `main`
 - 直前リリース基準（v1.3.0）: `c7bff3137511396d8a86d27a341fcddb70f8b316`（`v1.3.0にアップデート`）
-- パッケージ版: `1.7.0`（Android `versionCode` 19 / `versionName` 1.7.0）
+- パッケージ版: `1.7.1`（Android `versionCode` 20 / `versionName` 1.7.1）
 
 この文書は「いまどこまで動くか」の正本である。設計の正本は仕様書、作業順の正本は実装計画である。計画書の未着手タスクを消さない。完了扱いにできるのはリリース済みの範囲だけである。
 
@@ -295,7 +295,7 @@ Android だけで Pairing JSON / 再認証、Workspace / Session 一覧、New Se
 | TASK-200 `npm test` / lint / format | 成功 | v1.3.0 リリース時 |
 | TASK-201 `npm run build` | 成功 | v1.4.0 |
 | TASK-201 `npm test` / lint / format:check | 成功 | v1.4.0 リリース時 |
-| Android `assembleDebug` / `testDebugUnitTest` | GitHub Actions CI | v1.6.1 成功済み。v1.7.0 の unit / build は Codex が GitHub Actions で実施 |
+| Android `assembleDebug` / `testDebugUnitTest` | GitHub Actions CI | v1.6.1 成功済み。v1.7.0 は disconnect 中 in-flight `session.send` テスト競合で失敗。v1.7.1 で競合を修正し、GitHub Actions で再検証 |
 | Android 実機の Relay / Pairing / Chat | 未実施 | Gate B 未到達 |
 
 ---

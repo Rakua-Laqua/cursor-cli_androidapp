@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## [1.7.1] - 2026-08-22
+
+### 修正
+
+- Android unit test の disconnect 中 in-flight `session.send` のスケジューリング競合を決定的にした。製品挙動と Remote Protocol の変更はない。
+
 ## [1.7.0] - 2026-08-22
 
 ### 追加

@@ -12,6 +12,7 @@ import dev.cursorremote.android.data.protocol.RemoteEvent
 import dev.cursorremote.android.data.protocol.RemoteProtocol
 import dev.cursorremote.android.data.transport.ConnectionState
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
@@ -155,7 +156,7 @@ class RemoteRepositoryTest {
             repo.authenticate("ws://127.0.0.1:8787", "pc-1", "device-1")
             hangSessionSend(transport)
             val sendJob =
-                async {
+                async(start = CoroutineStart.UNDISPATCHED) {
                     try {
                         repo.sendSessionPrompt("sess-1", "hello")
                         fail("expected disconnect")
@@ -163,6 +164,7 @@ class RemoteRepositoryTest {
                         assertEquals("Disconnected", error.message)
                     }
                 }
+            assertTrue(sendJob.isActive)
             repo.disconnect()
             sendJob.await()
         }
