@@ -7,7 +7,7 @@
 - 対象リポジトリ: `Rakua-Laqua/cursor-cli_androidapp`
 - ブランチ: `main`
 - 直前リリース基準（v1.3.0）: `c7bff3137511396d8a86d27a341fcddb70f8b316`（`v1.3.0にアップデート`）
-- パッケージ版: `1.6.0`（Android `versionCode` 17 / `versionName` 1.6.0）
+- パッケージ版: `1.6.1`（Android `versionCode` 18 / `versionName` 1.6.1）
 
 この文書は「いまどこまで動くか」の正本である。設計の正本は仕様書、作業順の正本は実装計画である。計画書の未着手タスクを消さない。完了扱いにできるのはリリース済みの範囲だけである。
 
@@ -24,7 +24,7 @@
 | TASK-200 Relay WebSocket Core | **完了・v1.3.0 でリリース済み** |
 | TASK-201 Device Pairing | **完了・v1.4.0 でリリース済み** |
 | TASK-202 Android Application Skeleton | **実装済み・v1.5.0** |
-| TASK-203 Workspace / Session UI | **実装済み・v1.6.0** |
+| TASK-203 Workspace / Session UI | **実装済み・v1.6.0 / compile 修正 v1.6.1** |
 | TASK-204 Chat Streaming UI | **未着手** |
 | Gate B（Android 実機の Chat Streaming） | **未到達** |
 | Phase 3 以降（Diff / Voice / Permission UI など） | **未着手** |
@@ -109,7 +109,7 @@ npm run remote-dev -- e2e
 | TASK-200 | Relay WebSocket Core | **リリース済み v1.3.0** |
 | TASK-201 | Device Pairing | **リリース済み v1.4.0** |
 | TASK-202 | Android Application Skeleton | **実装済み v1.5.0** |
-| TASK-203 | Workspace / Session UI | **実装済み v1.6.0** |
+| TASK-203 | Workspace / Session UI | **実装済み v1.6.0 / compile 修正 v1.6.1** |
 | TASK-204 | Chat Streaming UI | 未着手 |
 
 Phase 2 の残作業は TASK-204。Gate B は Android 実機の Chat Streaming まで通過しない。
@@ -269,9 +269,9 @@ v1.5.0 時点の次は TASK-203。
 
 ---
 
-## 7. TASK-203（v1.6.0）
+## 7. TASK-203（v1.6.0 実装・v1.6.1 compile 修正）
 
-Android だけで Pairing JSON / 再認証、Workspace / Session 一覧、New Session、過去 Session 再開。Chat / Camera / Gate B は未完。次は TASK-204。詳細は CHANGELOG 1.6.0。
+Android だけで Pairing JSON / 再認証、Workspace / Session 一覧、New Session、過去 Session 再開。v1.6.1 は Compose `weight` 明示 import の compile 修正のみ。Chat / Camera / Gate B は未完。次は TASK-204。
 
 ---
 
@@ -285,7 +285,7 @@ Android だけで Pairing JSON / 再認証、Workspace / Session 一覧、New Se
 | TASK-200 `npm test` / lint / format | 成功 | v1.3.0 リリース時 |
 | TASK-201 `npm run build` | 成功 | v1.4.0 |
 | TASK-201 `npm test` / lint / format:check | 成功 | v1.4.0 リリース時 |
-| Android `assembleDebug` / `testDebugUnitTest` | GitHub Actions CI | v1.5.0 以降。TASK-203 の JVM unit test は実装済み。本記録では CI 未実行 |
+| Android `assembleDebug` / `testDebugUnitTest` | GitHub Actions CI | v1.6.1 の Compose `weight` import 修正は本記録時点で未検証。CI 成功は未確認 |
 | Android 実機の Relay / Pairing / Chat | 未実施 | Gate B 未到達 |
 
 ---
@@ -311,4 +311,4 @@ TASK-204  Chat Streaming UI
          → Gate B まで Android 実機で Chat が動くこと
 ```
 
-TASK-203 は v1.6.0。次は TASK-204。Camera / TLS / Gate B は未完。
+TASK-203 は v1.6.0 実装・v1.6.1 compile 修正。次は TASK-204。Camera / TLS / Gate B は未完。

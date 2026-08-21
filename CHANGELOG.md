@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## [1.6.1] - 2026-08-22
+
+### 修正
+
+- Android Compose の誤った `weight` 明示 import による compile 失敗を修正した。機能と Remote Protocol の変更はない。
+
 ## [1.6.0] - 2026-08-22
 
 ### 追加
