@@ -4,7 +4,7 @@ Android から PC 上の Cursor CLI / ACP セッションを操作するため�
 
 ## Repository layout
 
-- `android/` — Android ネイティブクライアント。Phase 0 では build 可能な Jetpack Compose 最小アプリのみを保持します。
+- `android/` — Android ネイティブクライアント。TASK-202 の Application Skeleton（Navigation、手動 DI、WebSocket transport、Room、Keystore、AppState）を持ちます。Machines / Workspaces / Sessions / Chat の実データ操作は TASK-203 / TASK-204 です。
 - `daemon/` — PC 上で動作する Local Daemon。Phase 1 の ACP / Workspace / Session / metadata と、簡易クライアント `remote-dev`、Relay outbound、Device Pairing バックエンドを含みます。
 - `relay/` — Android と Daemon を中継する Relay Server。v1.4.0 で localhost WebSocket core と `/client` 認証ゲートを持ちます。
 - `protocol/` — Android 向け Remote Protocol の共有 TypeScript 型と安全な JSON 境界処理です。
@@ -69,10 +69,10 @@ cd android
 gradle :app:assembleDebug :app:testDebugUnitTest
 ```
 
-Phase 0 の Android アプリは起動確認用の最小 Compose 画面だけを持ちます。Machines / Workspaces / Sessions / Chat の実データフローは TASK-202 以降の Scope です。
+Phase 0 の起動確認用画面は、TASK-202 の Application Skeleton に置き換わりました。開始画面は Machines で、Workspaces / Sessions / Chat へ前後遷移できます。各画面は TASK-203 / TASK-204 未実装のプレースホルダです。実データ一覧、Chat 送受信、QR カメラ、TLS、Relay 自動接続はまだありません。Gate B は未到達です。次の実装は TASK-203 です。
 
 ## Phase boundary
 
 Phase 1 の Local Daemon / ACP / Workspace / Session / metadata / Local E2E は `remote-dev` で固定します。実機の Cursor CLI / ACP Capability は `docs/acp_capability_report.md`、TASK-105 の一連確認は `docs/local_e2e_report.md` に記録済みです。未観測の機能を存在する前提で実装しないという拘束は維持します。
 
-Phase 2 の TASK-200 は v1.3.0、TASK-201 Device Pairing バックエンドは v1.4.0 です。詳細は `CHANGELOG.md` と `docs/implementation_status.md` を見てください。Android 実データフローは TASK-202 以降です。
+Phase 2 の TASK-200 は v1.3.0、TASK-201 Device Pairing バックエンドは v1.4.0、TASK-202 Android Application Skeleton は v1.5.0 です。詳細は `CHANGELOG.md` と `docs/implementation_status.md` を見てください。TASK-203 / TASK-204 と Gate B は未完です。次は TASK-203 です。

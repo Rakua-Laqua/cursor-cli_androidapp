@@ -7,7 +7,7 @@
 - 対象リポジトリ: `Rakua-Laqua/cursor-cli_androidapp`
 - ブランチ: `main`
 - 直前リリース基準（v1.3.0）: `c7bff3137511396d8a86d27a341fcddb70f8b316`（`v1.3.0にアップデート`）
-- パッケージ版: `1.4.0`（Android `versionCode` 15 / `versionName` 1.4.0）
+- パッケージ版: `1.5.0`（Android `versionCode` 16 / `versionName` 1.5.0）
 
 この文書は「いまどこまで動くか」の正本である。設計の正本は仕様書、作業順の正本は実装計画である。計画書の未着手タスクを消さない。完了扱いにできるのはリリース済みの範囲だけである。
 
@@ -15,7 +15,7 @@
 
 ## 1. いまの結論
 
-**Cursor Desktop なしで、PC 上の Local Daemon だけから Workspace / Session を操作できる。** Relay 経由の Command / Event 中継も localhost では動く。Device Pairing のバックエンドは v1.4.0 でリリース済み。Android QR / Keystore、実機経路、TLS、`/machine` 認証、インターネット公開対応は未実装。
+**Cursor Desktop なしで、PC 上の Local Daemon だけから Workspace / Session を操作できる。** Relay 経由の Command / Event 中継も localhost では動く。Device Pairing のバックエンドは v1.4.0 でリリース済み。Android Application Skeleton（TASK-202）は v1.5.0 で実装済み。実データ一覧、Chat 送受信、QR カメラ、TLS、`/machine` 認証、インターネット公開対応は未実装。Gate B は未到達。次は TASK-203。
 
 | 区分 | 状態 |
 | --- | --- |
@@ -23,11 +23,12 @@
 | Gate A（実 Cursor CLI の Local E2E） | **通過**。記録は `docs/local_e2e_report.md` |
 | TASK-200 Relay WebSocket Core | **完了・v1.3.0 でリリース済み** |
 | TASK-201 Device Pairing | **完了・v1.4.0 でリリース済み** |
-| TASK-202〜204 Android Text Remote | **未着手**（Phase 0 の起動確認用 Compose 画面のみ） |
+| TASK-202 Android Application Skeleton | **実装済み・v1.5.0**（プレースホルダ Navigation。実データ / Chat は未実装） |
+| TASK-203〜204 Workspace / Session UI と Chat Streaming | **未着手** |
 | Gate B（Android 実機の Chat Streaming） | **未到達** |
 | Phase 3 以降（Diff / Voice / Permission UI など） | **未着手** |
 
-次の作業は TASK-202 Android Application Skeleton である。
+次の作業は TASK-203 Workspace / Session UI である。
 
 ---
 
@@ -46,10 +47,16 @@
 - 未 Pairing の client Command は Machine に届かない。Event は認証済み client にだけ送る。
 - Daemon 再起動後も、永続化した public device で `auth_proof` できる。
 
+### 動く（v1.5.0 Android Skeleton）
+
+- Machines を開始画面とする 4 destination のプレースホルダ Navigation。
+- 手動 DI、Room の Machine 一覧 Flow、Keystore の EC P-256 device key、OkHttp WebSocket transport（起動時は未接続）。
+- 選択中 machine / workspace / session の cascade clear。
+
 ### まだない
 
 - Pairing の CLI / QR 表示 UI（`remote-dev` に pairing サブコマンドはない）。
-- Android の QR カメラ、Keystore、WebSocket client、Room、Navigation。
+- Android の QR カメラ、実 Machine / Workspace / Session 一覧、Chat 送受信（TASK-203 / TASK-204）。
 - TLS / インターネット公開用の認証。`/machine` は localhost の非認証 `ws://` のまま。
 - Push、Account Usage、File content 保存、Diff UI、Voice、Permission UI。
 - 単発 `session cancel`（別プロセスからの停止は未実測のため非公開）。
@@ -60,7 +67,8 @@
 
 状態の意味:
 
-- **リリース済み**: パッケージ版 v1.4.0 に含まれる。v1.3.0 の基準コミットは `c7bff3137511396d8a86d27a341fcddb70f8b316`。
+- **リリース済み**: パッケージ版 v1.4.0 までに含まれるバックエンド。v1.3.0 の基準コミットは `c7bff3137511396d8a86d27a341fcddb70f8b316`。
+- **実装済み v1.5.0**: TASK-202 Android Application Skeleton。
 - **未着手**: 計画書の Scope どおり、実装していない。
 
 ### Phase 0 — Repository Foundation
@@ -70,7 +78,7 @@
 | TASK-000 | `android/` `daemon/` `relay/` `protocol/` `docs/` の module boundary、format / lint | リリース済み |
 | TASK-001 | Remote Protocol の Event / Command 型と JSON 境界 | リリース済み。v1.3.0 で `command` / `event` / `result` frame を追加 |
 
-Android は起動確認用 Compose 画面と `assembleDebug` / unit test のみ。Machines / Workspaces / Sessions / Chat の実データはない。
+Android は TASK-202 の Application Skeleton まで。Machines / Workspaces / Sessions / Chat の実データ操作は TASK-203 / TASK-204。
 
 ### Phase 1 — Cursor CLI Local Core（Milestone 1）
 
@@ -100,11 +108,11 @@ npm run remote-dev -- e2e
 | --- | --- | --- |
 | TASK-200 | Relay WebSocket Core | **リリース済み v1.3.0** |
 | TASK-201 | Device Pairing | **リリース済み v1.4.0** |
-| TASK-202 | Android Application Skeleton | 未着手 |
+| TASK-202 | Android Application Skeleton | **実装済み v1.5.0** |
 | TASK-203 | Workspace / Session UI | 未着手 |
 | TASK-204 | Chat Streaming UI | 未着手 |
 
-Phase 2 の残作業は Android 側が中心である。バックエンドの pairing がリリースされても、Gate B は Android 実機の Chat Streaming が動くまで通過しない。
+Phase 2 の残作業は TASK-203 / TASK-204 である。バックエンドの pairing がリリースされても、Gate B は Android 実機の Chat Streaming が動くまで通過しない。
 
 ### Phase 3 以降
 
@@ -229,14 +237,40 @@ v1.4.0 でバックエンドはリリース済み。計画書の完了条件 3 �
 
 未実装のまま残すもの（Scope 外）:
 
-- Android QR カメラ / Keystore
+- Android QR カメラ（TASK-202 でも未実装）
 - TLS
 - pairing 用 `remote-dev` サブコマンド
 - `/machine` の認証
 
 ---
 
-## 6. 検証の記録
+## 6. TASK-202（v1.5.0）の範囲
+
+Android Application Skeleton。Protocol / Daemon / Relay の公開挙動は変えない。
+
+実装済み:
+
+- Navigation Compose の 4 destination。開始は Machines。各画面は TASK-203 / TASK-204 未実装のプレースホルダで前後遷移できる
+- Application 所有の手動 DI（`AppContainer`）。Room、Keystore credential store、OkHttp WebSocket transport、ViewModel factory。Hilt / Koin なし
+- OkHttp WebSocket transport。`connect` / `send` / `disconnect`、`ConnectionState` StateFlow、受信 text Flow。URL は `ws` / `wss` のみ。起動時自動接続なし
+- Room の `MachineEntity` / `MachineDao` / `CursorRemoteDatabase`。Flow 一覧。秘密情報や message / file 内容は保存しない
+- Android Keystore の EC P-256 device key の作成・取得・削除。秘密鍵は export せず Room にも保存しない
+- 選択中 machine / workspace / session と transport 接続状態。選択変更時は下位選択をクリア
+- `FoundationTest` による destination 順序、初期 state、cascade clear
+
+未実装のまま残すもの:
+
+- TASK-203 の実 Machine / Workspace / Session 一覧と操作
+- TASK-204 の Chat 送受信
+- QR カメラ / pairing UI
+- TLS、Relay 自動接続
+- Gate B（Android 実機の Chat Streaming）
+
+次は TASK-203。
+
+---
+
+## 7. 検証の記録
 
 | 対象 | 結果 | 備考 |
 | --- | --- | --- |
@@ -246,32 +280,31 @@ v1.4.0 でバックエンドはリリース済み。計画書の完了条件 3 �
 | TASK-200 `npm test` / lint / format | 成功 | v1.3.0 リリース時 |
 | TASK-201 `npm run build` | 成功 | v1.4.0 |
 | TASK-201 `npm test` / lint / format:check | 成功 | v1.4.0 リリース時 |
-| Android `assembleDebug` | Phase 0 時点で可能 | TASK-202 の機能テストではない |
+| Android `assembleDebug` / `testDebugUnitTest` | GitHub Actions CI | v1.5.0 release commitでGradle 8.9のassembleDebug / testDebugUnitTestを確認 |
 | Android 実機の Relay / Pairing / Chat | 未実施 | Gate B 未到達 |
 
 ---
 
-## 7. モジュール別の現状
+## 8. モジュール別の現状
 
-| モジュール | リリース済み v1.4.0 | 未着手 |
+| モジュール | 実装済み v1.5.0 | 未着手 |
 | --- | --- | --- |
 | `protocol/` | Event / Command 型、Remote frame、Pairing 型・証明・QR payload | Android 向け追加画面用の型は不要な範囲で増やさない |
 | `daemon/` | ACP、Workspace、metadata、`remote-dev`、Relay outbound、`PairingManager`、device 永続化 | pairing CLI、Permission 実処理 |
 | `relay/` | WebSocket routing / correlation / heartbeat、`/client` の pairing ゲート | TLS、Push |
-| `android/` | Phase 0 の最小 Compose | Navigation、DI、WS、Room、Keystore、各画面 |
+| `android/` | TASK-202 Skeleton（Navigation、手動 DI、WS transport、Room Machine 一覧、Keystore device key、AppState） | TASK-203/204 の実データ UI、QR、Chat |
 | `docs/` | 仕様、計画、ACP 実測、Local E2E、本ファイル | — |
 
 ---
 
-## 8. 次の実装順
+## 9. 次の実装順
 
 計画書と Gate を崩さない。
 
 ```text
-TASK-202  Android Application Skeleton
 TASK-203  Workspace / Session UI
 TASK-204  Chat Streaming UI
          → Gate B まで Android 実機で Chat が動くこと
 ```
 
-TASK-201 は v1.4.0 で完了・リリース済みである。次の実装は TASK-202。Android QR / Keystore、TLS、`/machine` 認証、インターネット公開対応は未実装のまま残す。
+TASK-202 は v1.5.0 で Application Skeleton まで実装済みである。次の実装は TASK-203。QR カメラ、TLS、`/machine` 認証、インターネット公開対応、Gate B は未実装のまま残す。

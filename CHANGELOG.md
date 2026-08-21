@@ -1,5 +1,28 @@
 # CHANGELOG
 
+## [1.5.0] - 2026-08-22
+
+### 追加
+
+- Android Application Skeleton（TASK-202）を追加した。Jetpack Compose Navigation の開始画面は Machines で、Machines / Workspaces / Sessions / Chat の 4 destination を定義する。各画面は TASK-203 / TASK-204 未実装と分かるプレースホルダであり、前後へ遷移できる。実 Machine / Workspace / Session 一覧と Chat 送受信は含まない。
+- Application 所有の手動 DI（`AppContainer`）を追加し、Room database、Keystore credential store、OkHttp WebSocket transport、ViewModel factory を生成して注入する。Hilt / Koin は使わない。
+- OkHttp WebSocket の最小 transport を追加した。`connect` / `send` / `disconnect`、`ConnectionState` の StateFlow、受信 text の Flow を提供する。URL は `ws` / `wss` のみ受け付け、起動時に自動接続しない。
+- Room の最小永続層として `MachineEntity` / `MachineDao` / `CursorRemoteDatabase` を追加し、Flow で一覧取得できる。秘密情報や message / file 内容は保存しない。
+- Android Keystore の EC P-256 device key を作成・取得・削除できる `CredentialStore` を追加した。秘密鍵は export せず、Room にも保存しない。
+- 選択中の machine / workspace / session と transport 接続状態を持つ AppState / ViewModel を追加した。選択変更時は下位選択をクリアする。
+
+### 変更
+
+- リポジトリ全体のパッケージ版を 1.5.0 に同期した。Android は `versionCode` 16 / `versionName` 1.5.0。Protocol / Daemon / Relay の公開挙動は変えない。
+
+### ドキュメント
+
+- TASK-202 の実装済み範囲と、TASK-203 / TASK-204 および Gate B が未完であること、次が TASK-203 であることを README と実装計画・実装状況に記録した。
+
+### テスト
+
+- `FoundationTest` を destination 順序、初期 state、選択の cascade clear を検証する unit test に更新した。
+
 ## [1.4.0] - 2026-08-21
 
 ### 追加

@@ -360,7 +360,7 @@ workspace select
 
 # Phase 2 — Relay + Android Text Remote
 
-2026-08-21 時点: TASK-200 は v1.3.0、TASK-201 は v1.4.0 でリリース済み。TASK-202 以降は未着手。詳細は `docs/implementation_status.md`。Gate B〜D は維持する。
+2026-08-21 時点: TASK-200 は v1.3.0、TASK-201 は v1.4.0 でリリース済み。TASK-202 は v1.5.0 で Application Skeleton を実装済み。TASK-203 / TASK-204 と Gate B は未完。次は TASK-203。詳細は `docs/implementation_status.md`。Gate B〜D は維持する。
 
 ## TASK-200: Relay WebSocket Core
 
@@ -446,6 +446,10 @@ Chat
 ```
 
 見た目の磨き込みよりデータフローを優先する。
+
+### 実施記録
+
+2026-08-21、v1.5.0 で実装。Compose Navigation の 4 destination（開始は Machines）、Application 所有の手動 DI、OkHttp WebSocket transport（`ws` / `wss` のみ、起動時自動接続なし）、Room の `MachineEntity` 一覧 Flow、Keystore の EC P-256 device key（秘密鍵は export / Room 保存しない）、選択 cascade の AppState / ViewModel。各画面は TASK-203 / TASK-204 未実装のプレースホルダ。実データ一覧・Chat 送受信・QR カメラ・TLS・Relay 自動接続は含まない。Gate B は未到達。次は TASK-203。
 
 ---
 
