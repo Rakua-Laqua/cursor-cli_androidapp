@@ -13,6 +13,19 @@ export {
 } from './pairing/pairing-manager.js';
 export { AcpSessionAdapter, type CreateSessionInput } from './session/session-adapter.js';
 export { mapAcpSessionUpdate, type MappedSessionEvent } from './session/map-session-update.js';
+export { DiffPipeline } from './diff/diff-pipeline.js';
+export {
+  DIFF_GIT_TIMEOUT_MS,
+  GitDiffError,
+  GitDiffSource,
+  MAX_DIFF_FILE_BYTES,
+  MAX_DIFF_FILES,
+  MAX_DIFF_PAYLOAD_BYTES,
+  emptySnapshot,
+  type DiffCollectInput,
+  type DiffSource,
+} from './diff/git-diff-source.js';
+export { isSensitivePath } from './diff/sensitive-path.js';
 export {
   MAX_PERMISSION_COMMAND_LENGTH,
   MAX_PERMISSION_KIND_LENGTH,

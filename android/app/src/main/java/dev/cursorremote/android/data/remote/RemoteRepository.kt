@@ -1,5 +1,6 @@
 package dev.cursorremote.android.data.remote
 
+import dev.cursorremote.android.data.protocol.DiffSnapshot
 import dev.cursorremote.android.data.protocol.IncomingRemoteFrame
 import dev.cursorremote.android.data.protocol.PairingQrPayload
 import dev.cursorremote.android.data.protocol.ProtocolParseError
@@ -115,6 +116,13 @@ class RemoteRepository(
 
     suspend fun rejectPermission(sessionId: String, permissionId: String) {
         sendCommand("permission.reject", RemoteProtocol.permissionRejectPayload(permissionId), sessionId)
+    }
+
+    suspend fun readDiff(workspaceId: String): DiffSnapshot {
+        val value =
+            sendCommand("diff.read", RemoteProtocol.diffReadPayload(workspaceId), sessionId = null)
+                ?: throw RemoteRepositoryException("diff.read value must be a snapshot.")
+        return RemoteProtocol.parseDiffSnapshot(value)
     }
 
     fun disconnect() {

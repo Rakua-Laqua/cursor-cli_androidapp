@@ -128,6 +128,33 @@ export interface PermissionDecisionCommandPayload extends JsonObject {
   readonly permissionId: string;
 }
 
+export type DiffChangeKind = 'modified' | 'added' | 'deleted' | 'renamed' | 'untracked';
+
+export type DiffSourceKind = 'git' | 'none';
+
+export interface DiffFilePayload extends JsonObject {
+  readonly path: string;
+  readonly previousPath: string | null;
+  readonly change: DiffChangeKind;
+  readonly binary: boolean;
+  readonly sensitive: boolean;
+  readonly additions: number;
+  readonly deletions: number;
+  readonly unifiedDiff: string | null;
+  readonly truncated: boolean;
+}
+
+export interface DiffSnapshotPayload extends JsonObject {
+  readonly workspaceId: string;
+  readonly available: boolean;
+  readonly source: DiffSourceKind;
+  readonly files: DiffFilePayload[];
+  readonly truncated: boolean;
+  readonly omittedCount: number;
+  readonly totalAdditions: number;
+  readonly totalDeletions: number;
+}
+
 export interface KnownEventPayloads {
   readonly 'workspace.updated': WorkspaceUpdatedPayload;
   readonly 'session.created': SessionPayload;
@@ -142,6 +169,7 @@ export interface KnownEventPayloads {
   readonly 'agent.interrupted': AgentTerminalPayload;
   readonly 'permission.requested': PermissionRequestedPayload;
   readonly 'permission.resolved': PermissionResolvedPayload;
+  readonly 'diff.updated': DiffSnapshotPayload;
 }
 
 export interface EventEnvelope<TType extends string, TPayload extends JsonValue> {
@@ -222,6 +250,10 @@ export interface SessionSendCommandPayload extends JsonObject {
 }
 
 export interface SessionCancelCommandPayload extends JsonObject {}
+
+export interface DiffReadCommandPayload extends JsonObject {
+  readonly workspaceId: string;
+}
 
 const eventTypeSet: ReadonlySet<string> = new Set(EVENT_TYPES);
 const commandTypeSet: ReadonlySet<string> = new Set(COMMAND_TYPES);

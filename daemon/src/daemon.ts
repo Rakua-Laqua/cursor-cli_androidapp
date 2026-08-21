@@ -1,6 +1,7 @@
 import { join } from 'node:path';
 
 import type {
+  DiffSnapshotPayload,
   KnownRemoteEvent,
   RemoteCommand,
   SessionPayload,
@@ -9,6 +10,7 @@ import type {
 
 import { AcpProcess, type AcpProcessLogger, type AcpProcessOptions } from './acp/process.js';
 import { resolveAcpCommand } from './acp/resolve-command.js';
+import { DiffPipeline } from './diff/diff-pipeline.js';
 import { PairingManager } from './pairing/pairing-manager.js';
 import { AcpSessionAdapter } from './session/session-adapter.js';
 import { METADATA_FILE_NAME, MetadataStore } from './store/metadata-store.js';
@@ -37,6 +39,7 @@ export class Daemon {
     private readonly sessionAdapter: AcpSessionAdapter,
     private readonly workspaceManager: WorkspaceManager,
     private readonly pairingManager: PairingManager,
+    private readonly diffPipeline: DiffPipeline,
   ) {}
 
   static async start(options: DaemonStartOptions = {}): Promise<Daemon> {
@@ -82,7 +85,13 @@ export class Daemon {
 
     try {
       sessionAdapter = new AcpSessionAdapter(acpProcess, workspaceManager, store);
-      return new Daemon(acpProcess, sessionAdapter, workspaceManager, new PairingManager(store));
+      return new Daemon(
+        acpProcess,
+        sessionAdapter,
+        workspaceManager,
+        new PairingManager(store),
+        new DiffPipeline(workspaceManager),
+      );
     } catch (error) {
       await acpProcess.shutdown();
       throw error;
@@ -108,9 +117,11 @@ export class Daemon {
   onEvent(listener: (event: KnownRemoteEvent) => void): () => void {
     const stopSessions = this.sessionAdapter.onEvent(listener);
     const stopWorkspaces = this.workspaceManager.onEvent(listener);
+    const stopDiffs = this.diffPipeline.onEvent(listener);
     return () => {
       stopSessions();
       stopWorkspaces();
+      stopDiffs();
     };
   }
 
@@ -121,10 +132,14 @@ export class Daemon {
     | SessionPayload[]
     | WorkspaceUpdatedPayload
     | WorkspaceUpdatedPayload[]
+    | DiffSnapshotPayload
     | undefined
   > {
     if (command.type === 'workspace.list' || command.type === 'workspace.register') {
       return this.workspaceManager.handleCommand(command);
+    }
+    if (command.type === 'diff.read') {
+      return this.diffPipeline.handleCommand(command);
     }
     return this.sessionAdapter.handleCommand(command);
   }

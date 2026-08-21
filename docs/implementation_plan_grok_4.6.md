@@ -547,6 +547,10 @@ AndroidはDaemonのpolicyを突破できない。
 
 Cursor変更後、PCを開かずAndroidからDiffを確認できる。
 
+### 実施記録
+
+2026-08-22、v1.9.0 で実装。観測した ACP に構造化 diff が無いため、Daemon の bounded Git fallback と手動 refresh のみ。Android は summary / 折りたたみ / unified diff / 横スクロール。SM-S928Q Android 16 で受け入れ。次は TASK-302。詳細は `docs/implementation_status.md`。
+
 ---
 
 ## TASK-302: Cursor Response File Links

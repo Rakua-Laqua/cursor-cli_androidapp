@@ -80,6 +80,10 @@ class FoundationTest {
             assertFalse(state.isSending)
             assertFalse(state.isStopping)
             assertNull(state.pendingPermission)
+            assertNull(state.diffSnapshot)
+            assertFalse(state.diffLoading)
+            assertNull(state.diffError)
+            assertTrue(state.expandedDiffPaths.isEmpty())
         }
     }
 
@@ -408,6 +412,49 @@ class FoundationTest {
         }
     }
 
+    @Test
+    fun diffRefreshWorkspaceCorrelationStaleRejectionSessionRetentionAndCollapse() {
+        withViewModel { viewModel, dao, transport ->
+            runBlocking {
+                dao.upsert(pairedMachine())
+                assertTrue(viewModel.connectExistingMachine("pc-1"))
+                assertTrue(viewModel.openWorkspace("ws-1"))
+                assertTrue(viewModel.resumeSession("sess-1"))
+                viewModel.refreshDiff()
+                assertEquals("ws-1", viewModel.uiState.value.diffSnapshot?.workspaceId)
+                assertFalse(viewModel.uiState.value.diffLoading)
+                val retained = viewModel.uiState.value.diffSnapshot
+                viewModel.selectSession("sess-2")
+                assertEquals("sess-2", viewModel.uiState.value.selectedSessionId)
+                assertEquals(retained, viewModel.uiState.value.diffSnapshot)
+                viewModel.toggleDiffFile("src/foo.ts")
+                assertTrue(viewModel.uiState.value.expandedDiffPaths.contains("src/foo.ts"))
+                viewModel.toggleDiffFile("src/foo.ts")
+                assertTrue(viewModel.uiState.value.expandedDiffPaths.isEmpty())
+                hangDiffRead(transport)
+                viewModel.refreshDiff()
+                val hung = lastCommand(transport, "diff.read")
+                assertTrue(viewModel.uiState.value.diffLoading)
+                val sentWhileLoading = transport.sent.count { commandType(it) == "diff.read" }
+                viewModel.refreshDiff()
+                assertEquals(sentWhileLoading, transport.sent.count { commandType(it) == "diff.read" })
+                viewModel.selectWorkspace("ws-2")
+                assertNull(viewModel.uiState.value.diffSnapshot)
+                assertFalse(viewModel.uiState.value.diffLoading)
+                assertTrue(viewModel.uiState.value.expandedDiffPaths.isEmpty())
+                transport.emit(resultJson(requestIdOf(hung), ok = true, value = snapshotJson("ws-1")))
+                assertNull(viewModel.uiState.value.diffSnapshot)
+                assertEquals("ws-2", viewModel.uiState.value.selectedWorkspaceId)
+                viewModel.selectWorkspace("ws-1")
+                transport.emit(eventJson("diff.updated", null, snapshotJson("ws-other", additions = 9), eventId = "evt-other-ws"))
+                assertNull(viewModel.uiState.value.diffSnapshot)
+                transport.emit(eventJson("diff.updated", null, snapshotJson("ws-1", additions = 4), eventId = "evt-ws-1"))
+                assertEquals("ws-1", viewModel.uiState.value.diffSnapshot?.workspaceId)
+                assertEquals(4, viewModel.uiState.value.diffSnapshot?.totalAdditions)
+            }
+        }
+    }
+
     private fun withViewModel(
         autoRespond: Boolean = true,
         block: (CursorRemoteViewModel, FakeMachineDao, FakeTransport) -> Unit,
@@ -589,6 +636,10 @@ internal fun successBody(
                         """{"remoteSessionId":"sess-new","cursorSessionId":null,"workspaceId":"ws-1","title":"Session","status":"idle","createdAt":"c","updatedAt":"u"}"""
                     "session.load" ->
                         """{"remoteSessionId":"sess-1","cursorSessionId":null,"workspaceId":"ws-1","title":"Session","status":"idle","createdAt":"c","updatedAt":"u"}"""
+                    "diff.read" -> snapshotJson(
+                        Json.parseToJsonElement(text).jsonObject.getValue("command").jsonObject
+                            .getValue("payload").jsonObject.getValue("workspaceId").jsonPrimitive.content,
+                    )
                     else -> "null"
                 }
             else -> "null"
@@ -598,16 +649,32 @@ internal fun successBody(
 
 internal fun eventJson(
     type: String,
-    sessionId: String,
+    sessionId: String?,
     payload: String,
     eventId: String = "evt-1",
+): String {
+    val sessionJson = if (sessionId == null) "null" else "\"$sessionId\""
+    return """{"kind":"event","event":{"eventId":"$eventId","sessionId":$sessionJson,"timestamp":"t","type":"$type","payload":$payload}}"""
+}
+
+internal fun snapshotJson(
+    workspaceId: String,
+    additions: Int = 0,
 ): String =
-    """{"kind":"event","event":{"eventId":"$eventId","sessionId":"$sessionId","timestamp":"t","type":"$type","payload":$payload}}"""
+    """{"workspaceId":"$workspaceId","available":true,"source":"git","files":[],"truncated":false,"omittedCount":0,"totalAdditions":$additions,"totalDeletions":0}"""
 
 internal fun lastCommand(
     transport: FakeTransport,
     type: String,
 ): String = transport.sent.last { commandType(it) == type }
+
+internal fun hangDiffRead(transport: FakeTransport) {
+    transport.onSend = { text ->
+        if (commandType(text) != "diff.read") {
+            transport.emit(successBody(requestIdOf(text), text))
+        }
+    }
+}
 
 internal fun hangSessionSend(
     transport: FakeTransport,

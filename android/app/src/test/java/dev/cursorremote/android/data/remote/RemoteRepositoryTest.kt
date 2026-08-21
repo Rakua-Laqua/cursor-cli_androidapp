@@ -171,6 +171,21 @@ class RemoteRepositoryTest {
         }
 
     @Test
+    fun diffReadSendsOnlyWorkspaceIdAndNullSessionId() =
+        withRepository { repo, transport ->
+            repo.authenticate("ws://127.0.0.1:8787", "pc-1", "device-1")
+            val snapshot = repo.readDiff("ws-1")
+            assertEquals("ws-1", snapshot.workspaceId)
+            val frame = lastCommand(transport, "diff.read")
+            assertTrue(frame.contains("\"type\":\"diff.read\""))
+            assertTrue(frame.contains("\"sessionId\":null"))
+            assertTrue(frame.contains("\"workspaceId\":\"ws-1\""))
+            assertEquals("""{"workspaceId":"ws-1"}""", RemoteProtocol.diffReadPayload("ws-1").toString())
+            assertEquals(false, frame.contains("gitArgs"))
+            assertEquals(false, frame.contains("\"path\""))
+        }
+
+    @Test
     fun disconnectFailsInFlightSessionSend() =
         withRepository { repo, transport ->
             repo.authenticate("ws://127.0.0.1:8787", "pc-1", "device-1")

@@ -1,5 +1,23 @@
 # CHANGELOG
 
+## [1.9.0] - 2026-08-22
+
+### 追加
+
+- Android の手動 Refresh Diff。選択中の登録済み Workspace について、変更ファイル一覧、ファイル数と +/- 合計、折りたたみ行、unified diff、等幅フォントの横スクロールを表示する。観測した ACP Capability に構造化 diff / ファイル変更 Event が無いため、Daemon の bounded Git fallback が唯一のソース。Relay は generic のまま変えない。非 Git Workspace は `available: false` の空状態を返す。agent 完了からの自動更新と、TASK-302 の View file / 応答内リンクは含まない。
+
+### 変更
+
+- パッケージ版 1.9.0、Android `versionCode` 22 / `versionName` 1.9.0。
+
+### セキュリティ
+
+- Android は `workspaceId` だけを送る。Daemon は信頼済み path を再解決し、shell なしの bounded Git を Workspace 結界内で実行する。`.env` / key / 証明書 / credentials / secrets の内容と、binary / symlink / submodule / 非 regular の内容は返さない。ファイル数・1ファイル・全体の上限では truncation / omission の metadata を出す。
+
+### テスト
+
+- `npm test` は protocol 14 / daemon 101 / relay 8 全 pass。`npm lint` pass。targeted Prettier pass。Gradle `:app:testDebugUnitTest :app:assembleDebug :app:lintDebug` pass。実機 SM-S928Q Android 16、localhost Relay + adb reverse で 21 ファイルの summary、+/- 合計、展開/折りたたみ、unified diff、横スクロールを確認。詳細は `docs/implementation_status.md`。
+
 ## [1.8.0] - 2026-08-22
 
 ### 追加

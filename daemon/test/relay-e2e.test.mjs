@@ -235,6 +235,31 @@ test('websocket mock ACP e2e: commands, streaming, cancel, restart, continuation
     assert.equal(listed.length, 1);
     assert.equal(listed[0].remoteSessionId, remoteSessionId);
 
+    const diffStart = frames.length;
+    const diffSnapshot = await rpc(
+      client,
+      frames,
+      'diff.read',
+      {
+        workspaceId,
+        path: '/etc/passwd',
+        gitArgs: ['status', '--porcelain'],
+        options: { extra: true },
+      },
+      null,
+    );
+    assert.equal(diffSnapshot.workspaceId, workspaceId);
+    assert.equal(diffSnapshot.available, false);
+    assert.equal(diffSnapshot.source, 'none');
+    assert.deepEqual(diffSnapshot.files, []);
+    assert.equal(diffSnapshot.omittedCount, 0);
+    const diffEvents = eventsFrom(frames, diffStart).filter(
+      (event) => event.type === 'diff.updated',
+    );
+    assert.equal(diffEvents.length, 1);
+    assert.equal(diffEvents[0].sessionId, null);
+    assert.deepEqual(diffEvents[0].payload, diffSnapshot);
+
     const sendStart = frames.length;
     await rpc(client, frames, 'session.send', { text: 'hello-stream' }, remoteSessionId);
     const streamed = eventsFrom(frames, sendStart);

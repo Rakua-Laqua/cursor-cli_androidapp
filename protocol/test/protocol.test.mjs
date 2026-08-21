@@ -236,3 +236,68 @@ test('parseRemoteCommandResult rejects inconsistent ok, error, and value states'
   assert.deepEqual(parseRemoteCommandResult(JSON.stringify(success)), success);
   assert.deepEqual(parseRemoteCommandResult(JSON.stringify(failure)), failure);
 });
+
+test('diff.read command and diff.updated event payloads roundtrip', () => {
+  const snapshot = {
+    workspaceId: 'ws-diff',
+    available: true,
+    source: 'git',
+    files: [
+      {
+        path: 'src/foo.ts',
+        previousPath: null,
+        change: 'modified',
+        binary: false,
+        sensitive: false,
+        additions: 2,
+        deletions: 1,
+        unifiedDiff: '--- a/src/foo.ts\n+++ b/src/foo.ts\n',
+        truncated: false,
+      },
+      {
+        path: 'src/renamed.ts',
+        previousPath: 'src/old.ts',
+        change: 'renamed',
+        binary: false,
+        sensitive: false,
+        additions: 0,
+        deletions: 0,
+        unifiedDiff: null,
+        truncated: false,
+      },
+    ],
+    truncated: false,
+    omittedCount: 0,
+    totalAdditions: 2,
+    totalDeletions: 1,
+  };
+  const event = {
+    eventId: 'evt_diff',
+    sessionId: null,
+    timestamp: '2026-08-22T00:00:00+09:00',
+    type: 'diff.updated',
+    payload: snapshot,
+  };
+  const command = {
+    requestId: 'req_diff',
+    sessionId: null,
+    timestamp: '2026-08-22T00:00:01+09:00',
+    type: 'diff.read',
+    payload: {
+      workspaceId: 'ws-diff',
+    },
+  };
+
+  assert.deepEqual(parseRemoteEvent(serializeEvent(event)), event);
+  assert.deepEqual(parseRemoteCommand(serializeCommand(command)), command);
+  const eventFrame = parseRemoteFrame(serializeRemoteFrame({ kind: 'event', event }));
+  assert.equal(eventFrame.kind, 'event');
+  assert.deepEqual(eventFrame.event, event);
+  const commandFrame = parseRemoteFrame(serializeRemoteFrame({ kind: 'command', command }));
+  assert.equal(commandFrame.kind, 'command');
+  assert.deepEqual(commandFrame.command, command);
+  assert.equal(command.sessionId, null);
+  assert.deepEqual(command.payload, { workspaceId: 'ws-diff' });
+  assert.equal(JSON.stringify(command.payload).includes('path'), false);
+  assert.equal(JSON.stringify(command.payload).includes('git'), false);
+});

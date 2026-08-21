@@ -5,6 +5,7 @@ import androidx.lifecycle.viewModelScope
 import dev.cursorremote.android.data.local.MachineDao
 import dev.cursorremote.android.data.local.MachineEntity
 import dev.cursorremote.android.data.protocol.ChatEvent
+import dev.cursorremote.android.data.protocol.DiffSnapshot
 import dev.cursorremote.android.data.protocol.ProtocolParseError
 import dev.cursorremote.android.data.protocol.RemoteEvent
 import dev.cursorremote.android.data.protocol.RemoteProtocol
@@ -59,6 +60,10 @@ data class CursorRemoteUiState(
     val isSending: Boolean = false,
     val isStopping: Boolean = false,
     val pendingPermission: PendingPermission? = null,
+    val diffSnapshot: DiffSnapshot? = null,
+    val diffLoading: Boolean = false,
+    val diffError: String? = null,
+    val expandedDiffPaths: Set<String> = emptySet(),
 )
 
 class CursorRemoteViewModel(
@@ -72,6 +77,7 @@ class CursorRemoteViewModel(
     private var pendingUserEcho: String? = null
     private val messageSeq = AtomicLong(0)
     private val chatEpoch = AtomicLong(0)
+    private val diffEpoch = AtomicLong(0)
     val uiState: StateFlow<CursorRemoteUiState> = _uiState.asStateFlow()
     val connectionState: StateFlow<ConnectionState> = remoteRepository.socketConnectionState
 
@@ -89,14 +95,16 @@ class CursorRemoteViewModel(
         scope.launch {
             remoteRepository.events.collect { event ->
                 applyChatEvent(event)
+                applyDiffEvent(event)
             }
         }
     }
 
     fun selectMachine(machineId: String?) {
         invalidateChat()
+        invalidateDiff()
         _uiState.update {
-            it.withClearedChat().copy(
+            it.withClearedChat().withClearedDiff().copy(
                 selectedMachineId = machineId,
                 selectedWorkspaceId = null,
                 selectedSessionId = null,
@@ -108,8 +116,9 @@ class CursorRemoteViewModel(
 
     fun selectWorkspace(workspaceId: String?) {
         invalidateChat()
+        invalidateDiff()
         _uiState.update {
-            it.withClearedChat().copy(selectedWorkspaceId = workspaceId, selectedSessionId = null, sessions = emptyList())
+            it.withClearedChat().withClearedDiff().copy(selectedWorkspaceId = workspaceId, selectedSessionId = null, sessions = emptyList())
         }
     }
 
@@ -177,6 +186,33 @@ class CursorRemoteViewModel(
         decidePermission(approve = false)
     }
 
+    fun refreshDiff() {
+        val workspaceId = _uiState.value.selectedWorkspaceId ?: return
+        if (_uiState.value.diffLoading) return
+        val epoch = diffEpoch.get()
+        _uiState.update { it.copy(diffLoading = true, diffError = null) }
+        scope.launch {
+            try {
+                applyDiffSnapshot(remoteRepository.readDiff(workspaceId), epoch)
+            } catch (error: CancellationException) {
+                finishDiff(workspaceId, epoch, errorMessage = null)
+                throw error
+            } catch (error: Exception) {
+                finishDiff(workspaceId, epoch, error.message ?: "Failed to read diff")
+            }
+        }
+    }
+
+    fun toggleDiffFile(path: String) {
+        _uiState.update { state ->
+            val next = state.expandedDiffPaths.toMutableSet()
+            if (!next.add(path)) {
+                next.remove(path)
+            }
+            state.copy(expandedDiffPaths = next)
+        }
+    }
+
     suspend fun registerFromPairingJson(
         pairingJson: String,
         displayName: String,
@@ -239,6 +275,48 @@ class CursorRemoteViewModel(
     override fun onCleared() {
         remoteRepository.disconnect()
         super.onCleared()
+    }
+
+    private fun applyDiffEvent(event: RemoteEvent) {
+        if (event.type != "diff.updated") {
+            return
+        }
+        val snapshot =
+            try {
+                RemoteProtocol.parseDiffSnapshot(event.payload)
+            } catch (_: ProtocolParseError) {
+                return
+            }
+        applyDiffSnapshot(snapshot, diffEpoch.get())
+    }
+
+    private fun applyDiffSnapshot(snapshot: DiffSnapshot, epoch: Long) {
+        _uiState.update { state ->
+            if (diffEpoch.get() != epoch || state.selectedWorkspaceId != snapshot.workspaceId) {
+                state
+            } else {
+                state.copy(
+                    diffLoading = false,
+                    diffError = null,
+                    diffSnapshot = snapshot,
+                    expandedDiffPaths = emptySet(),
+                )
+            }
+        }
+    }
+
+    private fun finishDiff(
+        workspaceId: String,
+        epoch: Long,
+        errorMessage: String?,
+    ) {
+        _uiState.update { state ->
+            if (diffEpoch.get() != epoch || state.selectedWorkspaceId != workspaceId) {
+                state
+            } else {
+                state.copy(diffLoading = false, diffError = errorMessage ?: state.diffError)
+            }
+        }
     }
 
     private fun applyChatEvent(event: RemoteEvent) {
@@ -480,6 +558,10 @@ class CursorRemoteViewModel(
         clearPendingUserEcho()
     }
 
+    private fun invalidateDiff() {
+        diffEpoch.incrementAndGet()
+    }
+
     private fun nextMessageId(): String = "msg-${messageSeq.incrementAndGet()}"
 
     private fun showWorkspaces(workspaces: List<WorkspaceInfo>) {
@@ -516,4 +598,12 @@ private fun CursorRemoteUiState.withClearedChat(): CursorRemoteUiState =
         isSending = false,
         isStopping = false,
         pendingPermission = null,
+    )
+
+private fun CursorRemoteUiState.withClearedDiff(): CursorRemoteUiState =
+    copy(
+        diffSnapshot = null,
+        diffLoading = false,
+        diffError = null,
+        expandedDiffPaths = emptySet(),
     )

@@ -51,6 +51,29 @@ data class SessionInfo(
     val updatedAt: String,
 )
 
+data class DiffFileInfo(
+    val path: String,
+    val previousPath: String?,
+    val change: String,
+    val binary: Boolean,
+    val sensitive: Boolean,
+    val additions: Int,
+    val deletions: Int,
+    val unifiedDiff: String?,
+    val truncated: Boolean,
+)
+
+data class DiffSnapshot(
+    val workspaceId: String,
+    val available: Boolean,
+    val source: String,
+    val files: List<DiffFileInfo>,
+    val truncated: Boolean,
+    val omittedCount: Int,
+    val totalAdditions: Int,
+    val totalDeletions: Int,
+)
+
 data class RemoteCommandResult(val requestId: String, val ok: Boolean, val value: JsonElement?, val error: String?)
 
 data class RemoteEvent(
@@ -152,6 +175,8 @@ object RemoteProtocol {
     const val P256_COORDINATE_BYTES = 32
     const val JS_MAX_SAFE_INTEGER = 9007199254740991L
     val SESSION_STATUSES = setOf("idle", "running", "waiting_approval", "waiting_user", "completed", "failed", "interrupted", "disconnected")
+    val DIFF_SOURCES = setOf("git", "none")
+    val DIFF_CHANGES = setOf("modified", "added", "deleted", "renamed", "untracked")
     val CHAT_EVENT_TYPES =
         setOf(
             "session.status_changed",
@@ -395,6 +420,11 @@ object RemoteProtocol {
 
     fun permissionRejectPayload(permissionId: String): JsonObject = permissionDecisionPayload(permissionId)
 
+    fun diffReadPayload(workspaceId: String): JsonObject {
+        requireNonEmpty(workspaceId, "workspaceId")
+        return buildJsonObject { put("workspaceId", workspaceId) }
+    }
+
     fun parseChatEvent(event: RemoteEvent): ChatEvent? {
         if (event.type !in CHAT_EVENT_TYPES) {
             return null
@@ -521,6 +551,24 @@ object RemoteProtocol {
         )
     }
 
+    fun parseDiffSnapshot(value: JsonElement?): DiffSnapshot {
+        val root = parseObject(value ?: throw ProtocolParseError("diff snapshot must be a JSON object."), "diff snapshot")
+        val source = requireNonEmptyString(root, "source")
+        if (source !in DIFF_SOURCES) {
+            throw ProtocolParseError("source must be git or none.")
+        }
+        return DiffSnapshot(
+            workspaceId = requireNonEmptyString(root, "workspaceId"),
+            available = requireBoolean(root, "available"),
+            source = source,
+            files = parseList(root["files"], "files", ::parseDiffFile),
+            truncated = requireBoolean(root, "truncated"),
+            omittedCount = requireNonNegativeInt(root, "omittedCount"),
+            totalAdditions = requireNonNegativeInt(root, "totalAdditions"),
+            totalDeletions = requireNonNegativeInt(root, "totalDeletions"),
+        )
+    }
+
     fun clientUrl(
         relayOrigin: String,
         machineId: String,
@@ -553,6 +601,7 @@ object RemoteProtocol {
         when (type) {
             "workspace.updated" -> parseWorkspace(payload)
             "session.created", "session.loaded" -> parseSession(payload)
+            "diff.updated" -> parseDiffSnapshot(payload)
         }
         val event =
             RemoteEvent(
@@ -632,6 +681,46 @@ object RemoteProtocol {
     private fun permissionDecisionPayload(permissionId: String): JsonObject {
         requireNonEmpty(permissionId, "permissionId")
         return buildJsonObject { put("permissionId", permissionId) }
+    }
+
+    private fun parseDiffFile(value: JsonElement): DiffFileInfo {
+        val root = parseObject(value, "diff file")
+        val change = requireNonEmptyString(root, "change")
+        if (change !in DIFF_CHANGES) {
+            throw ProtocolParseError("change must be a known diff change.")
+        }
+        val previousPath = requireNullableString(root, "previousPath")
+        if (change == "renamed") {
+            if (previousPath == null) {
+                throw ProtocolParseError("previousPath must be a non-empty string.")
+            }
+        } else if (previousPath != null) {
+            throw ProtocolParseError("previousPath must be null.")
+        }
+        return DiffFileInfo(
+            path = requireNonEmptyString(root, "path"),
+            previousPath = previousPath,
+            change = change,
+            binary = requireBoolean(root, "binary"),
+            sensitive = requireBoolean(root, "sensitive"),
+            additions = requireNonNegativeInt(root, "additions"),
+            deletions = requireNonNegativeInt(root, "deletions"),
+            unifiedDiff = requireNullableStringAllowEmpty(root, "unifiedDiff"),
+            truncated = requireBoolean(root, "truncated"),
+        )
+    }
+
+    private fun requireNullableStringAllowEmpty(
+        root: JsonObject,
+        key: String,
+    ): String? {
+        val value = root[key] ?: throw ProtocolParseError("$key must be a string or null.")
+        if (value is JsonNull) return null
+        val primitive = value as? JsonPrimitive
+        if (primitive == null || !primitive.isString) {
+            throw ProtocolParseError("$key must be a string or null.")
+        }
+        return primitive.content
     }
 
     private fun parseResultRecord(value: JsonObject): RemoteCommandResult {

@@ -210,6 +210,72 @@ class RemoteProtocolTest {
     }
 
     @Test
+    fun diffSnapshotParsesTypedPayloadsAndRejectsMalformed() {
+        assertEquals("""{"workspaceId":"ws-1"}""", RemoteProtocol.diffReadPayload("ws-1").toString())
+        val validFile =
+            """{"path":"src/foo.ts","previousPath":null,"change":"modified","binary":false,"sensitive":false,"additions":1,"deletions":2,"unifiedDiff":"diff text","truncated":false,"note":"extra"}"""
+        val valid =
+            """{"workspaceId":"ws-1","available":true,"source":"git","files":[$validFile],"truncated":false,"omittedCount":0,"totalAdditions":1,"totalDeletions":2,"extra":true}"""
+        val parsed = RemoteProtocol.parseDiffSnapshot(kotlinx.serialization.json.Json.parseToJsonElement(valid))
+        assertEquals("ws-1", parsed.workspaceId)
+        assertEquals(true, parsed.available)
+        assertEquals("git", parsed.source)
+        assertEquals("src/foo.ts", parsed.files.single().path)
+        assertEquals(1, parsed.files.single().additions)
+        val renamed =
+            """{"workspaceId":"ws-1","available":true,"source":"git","files":[{"path":"b.ts","previousPath":"a.ts","change":"renamed","binary":false,"sensitive":true,"additions":0,"deletions":0,"unifiedDiff":null,"truncated":false}],"truncated":true,"omittedCount":3,"totalAdditions":0,"totalDeletions":0}"""
+        val renamedParsed = RemoteProtocol.parseDiffSnapshot(kotlinx.serialization.json.Json.parseToJsonElement(renamed))
+        assertEquals("a.ts", renamedParsed.files.single().previousPath)
+        assertEquals("renamed", renamedParsed.files.single().change)
+        assertEquals(3, renamedParsed.omittedCount)
+        val none =
+            """{"workspaceId":"ws-1","available":false,"source":"none","files":[],"truncated":false,"omittedCount":0,"totalAdditions":0,"totalDeletions":0}"""
+        assertEquals("none", RemoteProtocol.parseDiffSnapshot(kotlinx.serialization.json.Json.parseToJsonElement(none)).source)
+        val event =
+            RemoteProtocol.parseIncomingFrame(
+                """{"kind":"event","event":{"eventId":"evt-d","sessionId":null,"timestamp":"t","type":"diff.updated","payload":$none}}""",
+            ) as IncomingRemoteFrame.Event
+        assertEquals("diff.updated", event.event.type)
+        assertEquals("ws-1", RemoteProtocol.parseDiffSnapshot(event.event.payload).workspaceId)
+        assertDiffParseError("source") {
+            valid.replace("\"git\"", "\"acp\"")
+        }
+        assertDiffParseError("change") {
+            valid.replace("\"modified\"", "\"copied\"")
+        }
+        assertDiffParseError("additions") {
+            valid.replace("\"additions\":1", "\"additions\":-1")
+        }
+        assertDiffParseError("deletions") {
+            valid.replace("\"deletions\":2", "\"deletions\":1.5")
+        }
+        assertDiffParseError("unifiedDiff") {
+            valid.replace("\"unifiedDiff\":\"diff text\"", "\"unifiedDiff\":true")
+        }
+        assertDiffParseError("files") {
+            """{"workspaceId":"ws-1","available":true,"source":"git","truncated":false,"omittedCount":0,"totalAdditions":0,"totalDeletions":0}"""
+        }
+        assertDiffParseError("previousPath") {
+            """{"workspaceId":"ws-1","available":true,"source":"git","files":[{"path":"a.ts","previousPath":"old.ts","change":"modified","binary":false,"sensitive":false,"additions":0,"deletions":0,"unifiedDiff":null,"truncated":false}],"truncated":false,"omittedCount":0,"totalAdditions":0,"totalDeletions":0}"""
+        }
+        assertDiffParseError("previousPath") {
+            """{"workspaceId":"ws-1","available":true,"source":"git","files":[{"path":"a.ts","previousPath":null,"change":"renamed","binary":false,"sensitive":false,"additions":0,"deletions":0,"unifiedDiff":null,"truncated":false}],"truncated":false,"omittedCount":0,"totalAdditions":0,"totalDeletions":0}"""
+        }
+    }
+
+    private fun assertDiffParseError(
+        messagePattern: String,
+        json: () -> String,
+    ) {
+        try {
+            RemoteProtocol.parseDiffSnapshot(kotlinx.serialization.json.Json.parseToJsonElement(json()))
+            fail("expected ProtocolParseError")
+        } catch (error: ProtocolParseError) {
+            assertTrue("message=${error.message}", Regex(messagePattern).containsMatchIn(error.message ?: ""))
+        }
+    }
+
+    @Test
     fun sessionPayloadRequiresKnownStatusAndNonEmptyTitle() {
         val valid =
             """{"remoteSessionId":"s1","cursorSessionId":null,"workspaceId":"ws-1","title":"Session","status":"idle","createdAt":"c","updatedAt":"u"}"""

@@ -7,7 +7,7 @@
 - 対象リポジトリ: `Rakua-Laqua/cursor-cli_androidapp`
 - ブランチ: `main`
 - 直前リリース基準（v1.3.0）: `c7bff3137511396d8a86d27a341fcddb70f8b316`（`v1.3.0にアップデート`）
-- パッケージ版: `1.8.0`（Android `versionCode` 21 / `versionName` 1.8.0）
+- パッケージ版: `1.9.0`（Android `versionCode` 22 / `versionName` 1.9.0）
 
 この文書は「いまどこまで動くか」の正本である。設計の正本は仕様書、作業順の正本は実装計画である。計画書の未着手タスクを消さない。完了扱いにできるのはリリース済みの範囲だけである。
 
@@ -15,7 +15,7 @@
 
 ## 1. いまの結論
 
-**Cursor Desktop なしで、PC 上の Local Daemon だけから Workspace / Session を操作し、Android からメモリ内 Chat を送受信し、実 ACP の permission を Approve / Reject できる。** Relay 経由の Command / Event 中継も localhost では動く。Device Pairing は v1.4.0、Android Skeleton は v1.5.0、Workspace / Session UI は v1.6.0、Chat は v1.7.0、Permission Flow は v1.8.0。QR カメラ、TLS、履歴永続化 / 再接続復元は未完。次は TASK-301 Diff Pipeline。
+**Cursor Desktop なしで、PC 上の Local Daemon だけから Workspace / Session を操作し、Android からメモリ内 Chat を送受信し、実 ACP の permission を Approve / Reject でき、選択中 Workspace の変更 Diff を手動で確認できる。** Relay 経由の Command / Event 中継も localhost では動く。Device Pairing は v1.4.0、Android Skeleton は v1.5.0、Workspace / Session UI は v1.6.0、Chat は v1.7.0、Permission Flow は v1.8.0、Diff Pipeline は v1.9.0。QR カメラ、TLS、履歴永続化 / 再接続復元は未完。次は TASK-302。
 
 | 区分 | 状態 |
 | --- | --- |
@@ -29,9 +29,10 @@
 | Gate B（Android 実機の Chat Streaming） | **通過**。2026-08-22、SM-S928Q / Android 16。詳細は §8 |
 | TASK-300 Permission Flow | **完了・v1.8.0**。Gate C 通過 |
 | Gate C（Permission Flow） | **通過**。詳細は §8 |
-| Phase 3 以降 | TASK-300 のみ完了。次は TASK-301 Diff Pipeline |
+| TASK-301 Diff Pipeline | **完了・v1.9.0** |
+| Phase 3 以降 | TASK-300 / TASK-301 まで完了。次は TASK-302 |
 
-次の作業は TASK-301 Diff Pipeline である。
+次の作業は TASK-302 である。
 
 ---
 
@@ -62,13 +63,18 @@
 
 - 実 ACP `session/request_permission` の Android approval card。Approve は保存済み `allow_once`、Reject / timeout / cancel / invalid / non-running / exit は `reject_once` または fail-closed。`allow_always` は選ばない。Android は `permissionId` のみ。
 
+### 動く（v1.9.0）
+
+- 選択中の登録済み Workspace に対する手動 Refresh Diff。観測した ACP に構造化 diff Event が無いため、Daemon の bounded Git fallback のみ。非 Git は `available: false` の空状態。Relay は generic のまま。
+
 ### まだない
 
 - Pairing の CLI / QR 表示 UI（`remote-dev` に pairing サブコマンドはない）。
 - Android の QR カメラ。
 - TLS / インターネット公開用の認証。`/machine` は localhost の非認証 `ws://` のまま。
 - Chat 履歴の永続化と再接続復元。
-- Push、Account Usage、File content 保存、Diff UI、Voice。
+- Push、Account Usage、File content 保存、応答内ファイルリンク / View file、Voice。
+- Diff の agent 完了連動の自動更新。
 - 単発 `session cancel`（別プロセスからの停止は未実測のため非公開）。
 
 ---
@@ -78,6 +84,7 @@
 状態の意味:
 
 - **リリース済み**: パッケージ版 v1.4.0 までに含まれるバックエンド。v1.3.0 の基準コミットは `c7bff3137511396d8a86d27a341fcddb70f8b316`。
+- **実装済み v1.9.0**: TASK-301 Diff Pipeline。
 - **実装済み v1.8.0**: TASK-300 Permission Flow。
 - **実装済み v1.7.0**: TASK-204 Chat Streaming UI。
 - **実装済み v1.6.0**: TASK-203 Workspace / Session UI。
@@ -91,7 +98,7 @@
 | TASK-000 | `android/` `daemon/` `relay/` `protocol/` `docs/` の module boundary、format / lint | リリース済み |
 | TASK-001 | Remote Protocol の Event / Command 型と JSON 境界 | リリース済み。v1.3.0 で `command` / `event` / `result` frame を追加 |
 
-Android は TASK-300 まで。Gate B / C は通過。
+Android は TASK-301 まで。Gate B / C は通過。
 
 ### Phase 1 — Cursor CLI Local Core（Milestone 1）
 
@@ -129,7 +136,7 @@ Phase 2 の Chat は v1.7.0。Gate B は 2026-08-22 に通過。実機記録は 
 
 ### Phase 3 以降
 
-TASK-300 Permission Flow は **v1.8.0 で完了**。Gate C 通過。TASK-301 Diff Pipeline 以降と Gate D は未着手。
+TASK-300 Permission Flow は **v1.8.0 で完了**。Gate C 通過。TASK-301 Diff Pipeline は **v1.9.0 で完了**。TASK-302 以降と Gate D は未着手。
 
 ---
 
@@ -298,6 +305,12 @@ Android だけで Pairing JSON / 再認証、Workspace / Session 一覧、New Se
 
 ---
 
+## 7.3 TASK-301（v1.9.0）
+
+観測した ACP Capability に構造化 diff / ファイル変更 Event が無いため、Daemon の bounded Git fallback が唯一のソース。`diff.read` は `workspaceId` のみ。Daemon は信頼済み path を再解決し、shell なしで Workspace 結界内の Git を実行する。非 Git は `available: false`。`.env` / key / 証明書 / credentials / secrets の内容と binary / symlink / submodule / 非 regular の内容は返さない。上限超過は truncation / omission の metadata。Android は手動 Refresh Diff、変更一覧、+/- 合計、折りたたみ、unified diff、等幅横スクロール。自動更新と TASK-302 の View file / 応答内リンクは含まない。実機記録は §8。
+
+---
+
 ## 8. 検証の記録
 
 | 対象 | 結果 | 備考 |
@@ -308,25 +321,29 @@ Android だけで Pairing JSON / 再認証、Workspace / Session 一覧、New Se
 | TASK-200 `npm test` / lint / format | 成功 | v1.3.0 リリース時 |
 | TASK-201 `npm run build` | 成功 | v1.4.0 |
 | TASK-201 `npm test` / lint / format:check | 成功 | v1.4.0 リリース時 |
-| Android `assembleDebug` / `testDebugUnitTest` | GitHub Actions CI / ローカル Gradle | v1.6.1 成功済み。v1.7.0 は disconnect 中 in-flight `session.send` テスト競合で失敗。v1.7.1 で競合を修正。v1.8.0 は `:app:testDebugUnitTest :app:assembleDebug :app:lintDebug` BUILD SUCCESSFUL |
+| Android `assembleDebug` / `testDebugUnitTest` | GitHub Actions CI / ローカル Gradle | v1.6.1 成功済み。v1.7.0 は disconnect 中 in-flight `session.send` テスト競合で失敗。v1.7.1 で競合を修正。v1.8.0 / v1.9.0 は `:app:testDebugUnitTest :app:assembleDebug :app:lintDebug` BUILD SUCCESSFUL |
 | `npm test` v1.8.0 | 成功 | protocol 13 / daemon 89 / relay 8、fail 0。targeted Prettier pass |
+| `npm test` v1.9.0 | 成功 | protocol 14 / daemon 101 / relay 8、fail 0。`npm lint` pass。targeted Prettier pass |
 | Android 実機 Chat（Gate B） | 通過（2026-08-22） | SM-S928Q / Android 16。下記 |
 | Android 実機 Permission（Gate C） | 通過（2026-08-22） | SM-S928Q / Android 16。下記 |
+| Android 実機 Diff（TASK-301） | 受け入れ（2026-08-22） | SM-S928Q / Android 16。下記 |
 
 Gate B（2026-08-22、SM-S928Q / Android 16）: localhost Relay と adb reverse。既存 pairing の再認証、Workspace / Session resume、terminal 前の逐次 Assistant 表示、Stop 後の `interrupted` / `stopped` を確認した。TLS とインターネット公開は使っていない。
 
 Gate C（2026-08-22、同端末）: `Get-ChildItem -Force` の `permission.requested` / approval card / high risk を確認した。Approve は `waiting_approval` → `permission.resolved` approved → コマンド結果 `.git` → completed。Reject は `permission.resolved` rejected → 非実行の Assistant 応答 → completed。Daemon が最終 authority。`allow_once` / `reject_once` 限定、fail-closed。Android は optionId / policy を送れない。検証後、Android keyboard subtype は日本語へ復元、adb reverse 削除、runner / ACP 停止、port 8787 free。
 
+TASK-301（2026-08-22、同端末）: localhost Relay と adb reverse。手動 Refresh Diff で 21 ファイルの summary、+/- 合計、展開/折りたたみ、unified diff、横スクロールを確認した。構造化 ACP diff、自動更新、View file、応答内リンク、TLS、インターネット公開は使っていない。検証後、stay-on を 0 に戻し、adb reverse を削除し、runner / ACP を停止し、port 8787 は空いた。証跡はローカル一時ディレクトリにあり、リポジトリ文書としてはリンクしない。
+
 ---
 
 ## 9. モジュール別の現状
 
-| モジュール | 実装済み v1.8.0 | 未着手 |
+| モジュール | 実装済み v1.9.0 | 未着手 |
 | --- | --- | --- |
-| `protocol/` | Event / Command 型、Remote frame、Pairing 型・証明・QR payload、permission requested/resolved と permissionId のみの approve/reject | Android 向け追加画面用の型は不要な範囲で増やさない |
-| `daemon/` | ACP、Workspace、metadata、`remote-dev`、Relay outbound、`PairingManager`、device 永続化、PermissionBridge（fail-closed） | pairing CLI |
-| `relay/` | WebSocket routing / correlation / heartbeat、`/client` の pairing ゲート | TLS、Push |
-| `android/` | TASK-204 Chat（メモリ内）、TASK-300 Permission approval card | QR カメラ、履歴永続化 / 再接続復元 |
+| `protocol/` | Event / Command 型、Remote frame、Pairing 型・証明・QR payload、permission requested/resolved と permissionId のみの approve/reject、diff snapshot payload | Android 向け追加画面用の型は不要な範囲で増やさない |
+| `daemon/` | ACP、Workspace、metadata、`remote-dev`、Relay outbound、`PairingManager`、device 永続化、PermissionBridge（fail-closed）、bounded Git DiffPipeline | pairing CLI |
+| `relay/` | WebSocket routing / correlation / heartbeat、`/client` の pairing ゲート。generic のまま（Diff 専用経路は追加しない） | TLS、Push |
+| `android/` | TASK-204 Chat（メモリ内）、TASK-300 Permission approval card、TASK-301 手動 Diff UI | QR カメラ、履歴永続化 / 再接続復元、View file / 応答内リンク |
 | `docs/` | 仕様、計画、ACP 実測、Local E2E、本ファイル | — |
 
 ---
@@ -336,7 +353,7 @@ Gate C（2026-08-22、同端末）: `Get-ChildItem -Force` の `permission.reque
 計画書と Gate を崩さない。
 
 ```text
-TASK-301 Diff Pipeline
+TASK-302 Cursor Response File Links
 ```
 
-TASK-300 は v1.8.0。Camera / TLS / 履歴永続化 / 再接続復元は未完。
+TASK-301 は v1.9.0。Camera / TLS / 履歴永続化 / 再接続復元は未完。

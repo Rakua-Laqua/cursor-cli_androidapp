@@ -84,6 +84,8 @@ fun CursorRemoteApp(viewModel: CursorRemoteViewModel) {
                         onStop = viewModel::stopSession,
                         onApprove = viewModel::approvePermission,
                         onReject = viewModel::rejectPermission,
+                        onRefreshDiff = viewModel::refreshDiff,
+                        onToggleDiffFile = viewModel::toggleDiffFile,
                     )
                 }
             }
