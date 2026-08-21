@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## [1.6.0] - 2026-08-22
+
+### 追加
+
+- Android Workspace / Session UI（TASK-203）。Pairing QR v1 JSON の貼り付けまたは既存 Machine の再認証、Workspace 一覧・選択、Session 一覧、New Session、過去 Session 再開。Chat 本文 / streaming は TASK-204。Camera scan は未実装。
+
+### 変更
+
+- Room `MachineEntity` version 2（`relayUrl` / `deviceId` / `lastConnectedAt`）と破壊しない Migration 1→2。成功 `deviceId` のみ保存し、秘密鍵・token・本文は Room に入れない。パッケージ版 1.6.0、Android `versionCode` 17 / `versionName` 1.6.0。Protocol / Daemon / Relay の公開挙動は変えない。
+
+### テスト
+
+- JVM unit test で codec、canonical proof、invalid QR、request correlation / auth、ViewModel の list / new / resume を検証する。実機、network、Android Keystore は使わない。
+
 ## [1.5.0] - 2026-08-22
 
 ### 追加

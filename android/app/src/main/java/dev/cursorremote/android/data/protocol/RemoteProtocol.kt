@@ -1,0 +1,585 @@
+package dev.cursorremote.android.data.protocol
+
+import java.math.BigInteger
+import java.net.URI
+import java.net.URLEncoder
+import java.nio.charset.StandardCharsets
+import java.security.MessageDigest
+import java.security.PublicKey
+import java.security.interfaces.ECPublicKey
+import java.util.Base64
+import java.util.Locale
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonArray
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+
+class ProtocolParseError(message: String) : Exception(message)
+
+data class P256PublicJwk(val kty: String, val crv: String, val x: String, val y: String)
+
+data class PairingQrPayload(
+    val v: Int,
+    val relayUrl: String,
+    val machineId: String,
+    val token: String,
+    val expiresAt: Long,
+)
+
+data class WorkspaceInfo(
+    val workspaceId: String,
+    val name: String,
+    val path: String,
+    val gitBranch: String?,
+    val modified: Boolean,
+    val activeSessionCount: Int,
+    val lastUsedAt: String?,
+)
+
+data class SessionInfo(
+    val remoteSessionId: String,
+    val cursorSessionId: String?,
+    val workspaceId: String,
+    val title: String,
+    val status: String,
+    val createdAt: String,
+    val updatedAt: String,
+)
+
+data class RemoteCommandResult(val requestId: String, val ok: Boolean, val value: JsonElement?, val error: String?)
+
+data class RemoteEvent(
+    val eventId: String,
+    val sessionId: String?,
+    val timestamp: String,
+    val type: String,
+    val payload: JsonElement,
+)
+
+sealed class IncomingRemoteFrame {
+    data class AuthChallenge(val nonce: String) : IncomingRemoteFrame()
+
+    data class Result(val result: RemoteCommandResult) : IncomingRemoteFrame()
+
+    data class Event(val event: RemoteEvent) : IncomingRemoteFrame()
+}
+
+object RemoteProtocol {
+    const val PAIRING_QR_VERSION = 1
+    const val PAIR_PROOF_DOMAIN = "cursor-remote.pair.v1"
+    const val AUTH_PROOF_DOMAIN = "cursor-remote.auth.v1"
+    const val PAIRING_TOKEN_BYTES = 32
+    const val PAIRING_NONCE_BYTES = 32
+    const val P256_COORDINATE_BYTES = 32
+    const val JS_MAX_SAFE_INTEGER = 9007199254740991L
+    val SESSION_STATUSES = setOf("idle", "running", "waiting_approval", "waiting_user", "completed", "failed", "interrupted", "disconnected")
+
+    fun parsePairingQrPayload(
+        text: String,
+        nowMillis: Long,
+    ): PairingQrPayload {
+        val root = parseObject(parseJson(text), "Pairing QR payload")
+        assertExactKeys(root, listOf("v", "relayUrl", "machineId", "token", "expiresAt"))
+        if (requireSafeInteger(root, "v") != PAIRING_QR_VERSION.toLong()) {
+            throw ProtocolParseError("v must be 1.")
+        }
+        val expiresAt = requireSafeInteger(root, "expiresAt")
+        if (expiresAt <= 0) {
+            throw ProtocolParseError("expiresAt must be a positive safe integer.")
+        }
+        if (nowMillis >= expiresAt) {
+            throw ProtocolParseError("pairing QR payload has expired.")
+        }
+        return PairingQrPayload(
+            v = PAIRING_QR_VERSION,
+            relayUrl = parseRelayOrigin(requireNonEmptyString(root, "relayUrl")),
+            machineId = requireNonEmptyString(root, "machineId"),
+            token = parseBase64UrlBytes(root.getValue("token"), PAIRING_TOKEN_BYTES, "token"),
+            expiresAt = expiresAt,
+        )
+    }
+
+    fun parseRelayOrigin(value: String): String {
+        val uri =
+            try {
+                URI(value)
+            } catch (_: Exception) {
+                throw ProtocolParseError("relayUrl must be a ws or wss origin.")
+            }
+        val scheme = uri.scheme?.lowercase(Locale.ROOT)
+            ?: throw ProtocolParseError("relayUrl must be a ws or wss origin.")
+        if (scheme != "ws" && scheme != "wss") {
+            throw ProtocolParseError("relayUrl must be a ws or wss origin.")
+        }
+        if (!uri.userInfo.isNullOrEmpty()) throw ProtocolParseError("relayUrl must not include credentials.")
+        if (!uri.rawQuery.isNullOrEmpty() || !uri.rawFragment.isNullOrEmpty()) {
+            throw ProtocolParseError("relayUrl must not include query or fragment.")
+        }
+        val path = uri.path.orEmpty()
+        val host = uri.host
+        if ((path.isNotEmpty() && path != "/") || host.isNullOrEmpty()) {
+            throw ProtocolParseError("relayUrl must be a ws or wss origin.")
+        }
+        return "$scheme://${formatOriginHost(host, uri.port, scheme)}"
+    }
+
+    fun parseIncomingFrame(text: String): IncomingRemoteFrame {
+        val root = parseObject(parseJson(text), "Frame")
+        return when (requireNonEmptyString(root, "kind")) {
+            "auth_challenge" -> {
+                assertExactKeys(root, listOf("kind", "nonce"))
+                IncomingRemoteFrame.AuthChallenge(
+                    parseBase64UrlBytes(root.getValue("nonce"), PAIRING_NONCE_BYTES, "nonce"),
+                )
+            }
+            "result" -> IncomingRemoteFrame.Result(parseResultRecord(requireObject(root, "result")))
+            "event" -> IncomingRemoteFrame.Event(parseEventRecord(requireJsonValue(root, "event")))
+            else -> throw ProtocolParseError("kind must be auth_challenge, result, or event.")
+        }
+    }
+
+    fun parseP256PublicJwk(value: JsonElement): P256PublicJwk {
+        val root = parseObject(value, "publicKey")
+        assertExactKeys(root, listOf("kty", "crv", "x", "y"))
+        if (requireNonEmptyString(root, "kty") != "EC") {
+            throw ProtocolParseError("publicKey.kty must be EC.")
+        }
+        if (requireNonEmptyString(root, "crv") != "P-256") {
+            throw ProtocolParseError("publicKey.crv must be P-256.")
+        }
+        return P256PublicJwk(
+            kty = "EC",
+            crv = "P-256",
+            x = parseBase64UrlBytes(root.getValue("x"), P256_COORDINATE_BYTES, "publicKey.x"),
+            y = parseBase64UrlBytes(root.getValue("y"), P256_COORDINATE_BYTES, "publicKey.y"),
+        )
+    }
+
+    fun p256PublicJwkFromKey(publicKey: PublicKey): P256PublicJwk {
+        val ec =
+            publicKey as? ECPublicKey
+                ?: throw ProtocolParseError("publicKey must be an EC P-256 key.")
+        if (ec.params.curve.field.fieldSize != 256) {
+            throw ProtocolParseError("publicKey.crv must be P-256.")
+        }
+        return P256PublicJwk(
+            kty = "EC",
+            crv = "P-256",
+            x = encodeBase64Url(toFixedLength(ec.w.affineX, P256_COORDINATE_BYTES, "publicKey.x")),
+            y = encodeBase64Url(toFixedLength(ec.w.affineY, P256_COORDINATE_BYTES, "publicKey.y")),
+        )
+    }
+
+    fun deviceIdFromPublicKey(publicKey: P256PublicJwk): String {
+        val canonical = parseP256PublicJwk(publicJwkElement(publicKey))
+        val digest =
+            MessageDigest.getInstance("SHA-256")
+                .digest(encodePublicJwk(canonical).toByteArray(StandardCharsets.UTF_8))
+        return encodeBase64Url(digest)
+    }
+
+    fun canonicalPairProofBytes(
+        machineId: String,
+        nonce: String,
+        token: String,
+        publicKey: P256PublicJwk,
+    ): ByteArray {
+        requireNonEmpty(machineId, "machineId")
+        parseBase64UrlBytes(JsonPrimitive(nonce), PAIRING_NONCE_BYTES, "nonce")
+        parseBase64UrlBytes(JsonPrimitive(token), PAIRING_TOKEN_BYTES, "token")
+        val canonicalKey = parseP256PublicJwk(publicJwkElement(publicKey))
+        return buildJsonArray {
+            add(JsonPrimitive(PAIR_PROOF_DOMAIN))
+            add(JsonPrimitive(machineId))
+            add(JsonPrimitive(nonce))
+            add(JsonPrimitive(token))
+            add(publicJwkElement(canonicalKey))
+        }.toString().toByteArray(StandardCharsets.UTF_8)
+    }
+
+    fun canonicalAuthProofBytes(
+        machineId: String,
+        nonce: String,
+        deviceId: String,
+    ): ByteArray {
+        requireNonEmpty(machineId, "machineId")
+        requireNonEmpty(deviceId, "deviceId")
+        parseBase64UrlBytes(JsonPrimitive(nonce), PAIRING_NONCE_BYTES, "nonce")
+        return buildJsonArray {
+            add(JsonPrimitive(AUTH_PROOF_DOMAIN))
+            add(JsonPrimitive(machineId))
+            add(JsonPrimitive(nonce))
+            add(JsonPrimitive(deviceId))
+        }.toString().toByteArray(StandardCharsets.UTF_8)
+    }
+
+    fun encodePairFrame(
+        requestId: String,
+        token: String,
+        publicKey: P256PublicJwk,
+        signature: ByteArray,
+    ): String {
+        requireNonEmpty(requestId, "requestId")
+        val canonicalToken = parseBase64UrlBytes(JsonPrimitive(token), PAIRING_TOKEN_BYTES, "token")
+        val canonicalKey = parseP256PublicJwk(publicJwkElement(publicKey))
+        return buildJsonObject {
+            put("kind", "pair")
+            put("requestId", requestId)
+            put("token", canonicalToken)
+            put("publicKey", publicJwkElement(canonicalKey))
+            put("signature", encodeBase64Url(signature))
+        }.toString()
+    }
+
+    fun encodeAuthProofFrame(
+        requestId: String,
+        deviceId: String,
+        signature: ByteArray,
+    ): String {
+        requireNonEmpty(requestId, "requestId")
+        requireNonEmpty(deviceId, "deviceId")
+        if (signature.isEmpty()) {
+            throw ProtocolParseError("signature must be base64url.")
+        }
+        return buildJsonObject {
+            put("kind", "auth_proof")
+            put("requestId", requestId)
+            put("deviceId", deviceId)
+            put("signature", encodeBase64Url(signature))
+        }.toString()
+    }
+
+    fun encodeCommandFrame(
+        requestId: String,
+        type: String,
+        payload: JsonObject,
+        timestamp: String,
+        sessionId: String? = null,
+    ): String {
+        requireNonEmpty(requestId, "requestId")
+        requireNonEmpty(type, "type")
+        requireNonEmpty(timestamp, "timestamp")
+        if (sessionId != null) requireNonEmpty(sessionId, "sessionId")
+        return buildJsonObject {
+            put("kind", "command")
+            put(
+                "command",
+                buildJsonObject {
+                    put("requestId", requestId)
+                    if (sessionId == null) put("sessionId", JsonNull) else put("sessionId", sessionId)
+                    put("timestamp", timestamp)
+                    put("type", type)
+                    put("payload", payload)
+                },
+            )
+        }.toString()
+    }
+
+    fun workspaceListPayload(): JsonObject = buildJsonObject {}
+
+    fun sessionListPayload(workspaceId: String): JsonObject {
+        requireNonEmpty(workspaceId, "workspaceId")
+        return buildJsonObject { put("workspaceId", workspaceId) }
+    }
+
+    fun sessionCreatePayload(workspaceId: String): JsonObject {
+        requireNonEmpty(workspaceId, "workspaceId")
+        return buildJsonObject {
+            put("workspaceId", workspaceId)
+            put("initialPrompt", "")
+            put("title", JsonNull)
+        }
+    }
+
+    fun sessionLoadPayload(remoteSessionId: String): JsonObject {
+        requireNonEmpty(remoteSessionId, "remoteSessionId")
+        return buildJsonObject { put("remoteSessionId", remoteSessionId) }
+    }
+
+    fun parseDeviceIdValue(value: JsonElement?): String {
+        val root = parseObject(value ?: throw ProtocolParseError("deviceId must be a non-empty string."), "value")
+        return requireNonEmptyString(root, "deviceId")
+    }
+
+    fun parseWorkspaceList(value: JsonElement?): List<WorkspaceInfo> = parseList(value, "workspace list", ::parseWorkspace)
+
+    fun parseSessionList(value: JsonElement?): List<SessionInfo> = parseList(value, "session list", ::parseSession)
+
+    fun parseWorkspace(value: JsonElement): WorkspaceInfo {
+        val root = parseObject(value, "workspace")
+        return WorkspaceInfo(
+            workspaceId = requireNonEmptyString(root, "workspaceId"),
+            name = requireNonEmptyString(root, "name"),
+            path = requireNonEmptyString(root, "path"),
+            gitBranch = requireNullableString(root, "gitBranch"),
+            modified = requireBoolean(root, "modified"),
+            activeSessionCount = requireNonNegativeInt(root, "activeSessionCount"),
+            lastUsedAt = requireNullableString(root, "lastUsedAt"),
+        )
+    }
+
+    fun parseSession(value: JsonElement): SessionInfo {
+        val root = parseObject(value, "session")
+        val status = requireNonEmptyString(root, "status")
+        if (status !in SESSION_STATUSES) {
+            throw ProtocolParseError("status must be a known session status.")
+        }
+        return SessionInfo(
+            remoteSessionId = requireNonEmptyString(root, "remoteSessionId"),
+            cursorSessionId = requireNullableString(root, "cursorSessionId"),
+            workspaceId = requireNonEmptyString(root, "workspaceId"),
+            title = requireNonEmptyString(root, "title"),
+            status = status,
+            createdAt = requireNonEmptyString(root, "createdAt"),
+            updatedAt = requireNonEmptyString(root, "updatedAt"),
+        )
+    }
+
+    fun clientUrl(
+        relayOrigin: String,
+        machineId: String,
+    ): String {
+        requireNonEmpty(machineId, "machineId")
+        val encoded =
+            URLEncoder.encode(machineId, StandardCharsets.UTF_8.name()).replace("+", "%20")
+        return "${parseRelayOrigin(relayOrigin)}/client?machineId=$encoded"
+    }
+
+    fun encodePublicJwk(publicKey: P256PublicJwk): String = publicJwkElement(publicKey).toString()
+
+    fun encodeBase64Url(bytes: ByteArray): String = Base64.getUrlEncoder().withoutPadding().encodeToString(bytes)
+
+    private fun formatOriginHost(
+        host: String,
+        port: Int,
+        scheme: String,
+    ): String {
+        val hostname = host.removePrefix("[").removeSuffix("]")
+        val formatted = if (hostname.contains(':')) "[$hostname]" else hostname
+        val defaultPort = if (scheme == "ws") 80 else 443
+        return if (port == -1 || port == defaultPort) formatted else "$formatted:$port"
+    }
+
+    private fun parseEventRecord(value: JsonElement): RemoteEvent {
+        val root = parseObject(value, "Event")
+        val type = requireNonEmptyString(root, "type")
+        val payload = requireJsonValue(root, "payload")
+        when (type) {
+            "workspace.updated" -> parseWorkspace(payload)
+            "session.created", "session.loaded" -> parseSession(payload)
+        }
+        return RemoteEvent(
+            eventId = requireNonEmptyString(root, "eventId"),
+            sessionId = requireNullableString(root, "sessionId"),
+            timestamp = requireNonEmptyString(root, "timestamp"),
+            type = type,
+            payload = payload,
+        )
+    }
+
+    private fun parseResultRecord(value: JsonObject): RemoteCommandResult {
+        val requestId = requireNonEmptyString(value, "requestId")
+        val ok = requireBoolean(value, "ok")
+        if ("value" !in value) {
+            throw ProtocolParseError("value must be valid JSON data or null.")
+        }
+        val rawValue = value.getValue("value")
+        if (rawValue !is JsonNull && !isJsonValue(rawValue)) {
+            throw ProtocolParseError("value must be valid JSON data or null.")
+        }
+        val error = requireNullableString(value, "error")
+        if (ok) {
+            if (error != null) {
+                throw ProtocolParseError("successful result must have error null.")
+            }
+            return RemoteCommandResult(requestId, true, rawValue.takeUnless { it is JsonNull }, null)
+        }
+        if (rawValue !is JsonNull) {
+            throw ProtocolParseError("failed result must have value null.")
+        }
+        if (error == null) {
+            throw ProtocolParseError("failed result must have a non-empty error.")
+        }
+        return RemoteCommandResult(requestId, false, null, error)
+    }
+
+    private fun publicJwkElement(publicKey: P256PublicJwk): JsonObject =
+        buildJsonObject {
+            put("kty", publicKey.kty)
+            put("crv", publicKey.crv)
+            put("x", publicKey.x)
+            put("y", publicKey.y)
+        }
+
+    private fun <T> parseList(
+        value: JsonElement?,
+        label: String,
+        parse: (JsonElement) -> T,
+    ): List<T> {
+        val array = value as? JsonArray ?: throw ProtocolParseError("$label must be a JSON array.")
+        return array.map(parse)
+    }
+
+    private fun parseJson(text: String): JsonElement =
+        try {
+            Json.parseToJsonElement(text)
+        } catch (_: Exception) {
+            throw ProtocolParseError("Frame must be a JSON object.")
+        }
+
+    private fun parseObject(
+        value: JsonElement,
+        label: String,
+    ): JsonObject = value as? JsonObject ?: throw ProtocolParseError("$label must be a JSON object.")
+
+    private fun requireObject(
+        root: JsonObject,
+        key: String,
+    ): JsonObject = parseObject(root[key] ?: throw ProtocolParseError("$key must be a JSON object."), key)
+
+    private fun requireJsonValue(
+        root: JsonObject,
+        key: String,
+    ): JsonElement {
+        val value = root[key] ?: throw ProtocolParseError("$key must be valid JSON data.")
+        if (!isJsonValue(value)) throw ProtocolParseError("$key must be valid JSON data.")
+        return value
+    }
+
+    private fun requireNonEmptyString(
+        root: JsonObject,
+        key: String,
+    ): String {
+        val value = root[key] as? JsonPrimitive
+        if (value == null || !value.isString || value.content.isEmpty()) {
+            throw ProtocolParseError("$key must be a non-empty string.")
+        }
+        return value.content
+    }
+
+    private fun requireNullableString(
+        root: JsonObject,
+        key: String,
+    ): String? {
+        val value = root[key] ?: throw ProtocolParseError("$key must be a non-empty string or null.")
+        if (value is JsonNull) return null
+        val primitive = value as? JsonPrimitive
+        if (primitive == null || !primitive.isString || primitive.content.isEmpty()) {
+            throw ProtocolParseError("$key must be a non-empty string or null.")
+        }
+        return primitive.content
+    }
+
+    private fun requireBoolean(
+        root: JsonObject,
+        key: String,
+    ): Boolean {
+        val value = root[key] as? JsonPrimitive
+        if (value == null || value.isString) throw ProtocolParseError("$key must be a boolean.")
+        return when (value.content) {
+            "true" -> true
+            "false" -> false
+            else -> throw ProtocolParseError("$key must be a boolean.")
+        }
+    }
+
+    private fun requireSafeInteger(
+        root: JsonObject,
+        key: String,
+    ): Long {
+        val value = root[key] as? JsonPrimitive
+        if (value == null || value.isString || !value.content.matches(Regex("0|-?[1-9][0-9]*"))) {
+            throw ProtocolParseError("$key must be a positive safe integer.")
+        }
+        val parsed = value.content.toLongOrNull() ?: throw ProtocolParseError("$key must be a positive safe integer.")
+        if (parsed > JS_MAX_SAFE_INTEGER || parsed < -JS_MAX_SAFE_INTEGER) {
+            throw ProtocolParseError("$key must be a positive safe integer.")
+        }
+        return parsed
+    }
+
+    private fun requireNonNegativeInt(
+        root: JsonObject,
+        key: String,
+    ): Int {
+        val parsed = requireSafeInteger(root, key)
+        if (parsed < 0 || parsed > Int.MAX_VALUE) throw ProtocolParseError("$key must be a non-negative integer.")
+        return parsed.toInt()
+    }
+
+    private fun requireNonEmpty(
+        value: String,
+        fieldName: String,
+    ) {
+        if (value.isEmpty()) throw ProtocolParseError("$fieldName must be a non-empty string.")
+    }
+
+    private fun assertExactKeys(
+        value: JsonObject,
+        keys: List<String>,
+    ) {
+        if (value.keys != keys.toSet()) throw ProtocolParseError("unexpected or missing fields.")
+    }
+
+    private fun parseBase64UrlBytes(
+        value: JsonElement,
+        size: Int,
+        fieldName: String,
+    ): String {
+        val raw = parseBase64Url(value, fieldName)
+        if (raw.size != size) throw ProtocolParseError("$fieldName must be $size bytes encoded as base64url.")
+        return encodeBase64Url(raw)
+    }
+
+    private fun parseBase64Url(
+        value: JsonElement,
+        fieldName: String,
+    ): ByteArray {
+        val primitive = value as? JsonPrimitive
+        if (primitive == null || !primitive.isString || primitive.content.isEmpty() ||
+            !primitive.content.matches(Regex("^[A-Za-z0-9_-]+$"))
+        ) {
+            throw ProtocolParseError("$fieldName must be base64url.")
+        }
+        val raw =
+            try {
+                Base64.getUrlDecoder().decode(primitive.content)
+            } catch (_: Exception) {
+                throw ProtocolParseError("$fieldName must be base64url.")
+            }
+        if (raw.isEmpty() || encodeBase64Url(raw) != primitive.content) {
+            throw ProtocolParseError("$fieldName must be base64url.")
+        }
+        return raw
+    }
+
+    private fun toFixedLength(
+        value: BigInteger,
+        size: Int,
+        fieldName: String,
+    ): ByteArray {
+        val raw = value.toByteArray()
+        val unsigned = if (raw.isNotEmpty() && raw[0] == 0.toByte()) raw.copyOfRange(1, raw.size) else raw
+        if (unsigned.isEmpty() || unsigned.size > size) {
+            throw ProtocolParseError("$fieldName must be $size bytes encoded as base64url.")
+        }
+        return if (unsigned.size == size) unsigned else ByteArray(size).also { unsigned.copyInto(it, size - unsigned.size) }
+    }
+
+    private fun isJsonValue(value: JsonElement): Boolean {
+        return when (value) {
+            is JsonNull -> true
+            is JsonPrimitive ->
+                value.isString || value.content == "true" || value.content == "false" ||
+                    value.content.toDoubleOrNull()?.isFinite() == true
+            is JsonArray -> value.all { isJsonValue(it) }
+            is JsonObject -> value.values.all { isJsonValue(it) }
+            else -> false
+        }
+    }
+}

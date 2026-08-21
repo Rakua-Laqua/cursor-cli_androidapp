@@ -13,8 +13,8 @@ android {
         applicationId = "dev.cursorremote.android"
         minSdk = 26
         targetSdk = 35
-        versionCode = 16
-        versionName = "1.5.0"
+        versionCode = 17
+        versionName = "1.6.0"
 
     }
 
@@ -55,6 +55,7 @@ dependencies {
     implementation("androidx.room:room-ktx:2.7.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     ksp("androidx.room:room-compiler:2.7.1")
 
     debugImplementation("androidx.compose.ui:ui-tooling")

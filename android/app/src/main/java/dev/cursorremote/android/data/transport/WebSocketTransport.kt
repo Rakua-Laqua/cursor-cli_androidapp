@@ -2,6 +2,7 @@ package dev.cursorremote.android.data.transport
 
 import java.net.URI
 import java.util.Locale
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -21,9 +22,15 @@ enum class ConnectionState {
     Failed,
 }
 
+data class TransportMessage(
+    val generation: Long,
+    val text: String,
+)
+
 interface WebSocketTransport {
     val connectionState: StateFlow<ConnectionState>
-    val incomingText: Flow<String>
+    val incomingMessages: Flow<TransportMessage>
+    val generation: Long
 
     fun connect(url: String)
 
@@ -37,12 +44,16 @@ class OkHttpWebSocketTransport(
 ) : WebSocketTransport {
     private val lock = Any()
     private var webSocket: WebSocket? = null
+    private val generationCounter = AtomicLong(0)
 
     private val _connectionState = MutableStateFlow(ConnectionState.Disconnected)
     override val connectionState: StateFlow<ConnectionState> = _connectionState.asStateFlow()
 
-    private val _incomingText = MutableSharedFlow<String>(extraBufferCapacity = 64)
-    override val incomingText: Flow<String> = _incomingText.asSharedFlow()
+    private val _incomingMessages = MutableSharedFlow<TransportMessage>(extraBufferCapacity = 64)
+    override val incomingMessages: Flow<TransportMessage> = _incomingMessages.asSharedFlow()
+
+    override val generation: Long
+        get() = generationCounter.get()
 
     private val listener =
         object : WebSocketListener() {
@@ -62,12 +73,14 @@ class OkHttpWebSocketTransport(
                 webSocket: WebSocket,
                 text: String,
             ) {
+                val currentGeneration: Long
                 synchronized(lock) {
                     if (this@OkHttpWebSocketTransport.webSocket !== webSocket) {
                         return
                     }
-                    _incomingText.tryEmit(text)
+                    currentGeneration = generationCounter.get()
                 }
+                _incomingMessages.tryEmit(TransportMessage(currentGeneration, text))
             }
 
             override fun onClosing(
@@ -119,6 +132,7 @@ class OkHttpWebSocketTransport(
             val previous = webSocket
             webSocket = null
             previous?.cancel()
+            generationCounter.incrementAndGet()
             _connectionState.value = ConnectionState.Connecting
             webSocket = client.newWebSocket(request, listener)
         }

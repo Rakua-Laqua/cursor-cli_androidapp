@@ -360,7 +360,7 @@ workspace select
 
 # Phase 2 — Relay + Android Text Remote
 
-2026-08-21 時点: TASK-200 は v1.3.0、TASK-201 は v1.4.0 でリリース済み。TASK-202 は v1.5.0 で Application Skeleton を実装済み。TASK-203 / TASK-204 と Gate B は未完。次は TASK-203。詳細は `docs/implementation_status.md`。Gate B〜D は維持する。
+2026-08-22 時点: TASK-200 は v1.3.0、TASK-201 は v1.4.0、TASK-202 は v1.5.0、TASK-203 は v1.6.0 で実装済み。TASK-204 と Gate B は未完。次は TASK-204。詳細は `docs/implementation_status.md`。Gate B〜D は維持する。
 
 ## TASK-200: Relay WebSocket Core
 
@@ -467,6 +467,10 @@ Machine選択
 → New Session
 → 過去Session再開
 ```
+
+### 実施記録
+
+2026-08-22、v1.6.0 で実装。Android だけで Pairing JSON 登録 / 再認証、Workspace 一覧・選択、Session 一覧、New Session、過去 Session 再開まで行う。Chat 本文と streaming は TASK-204。Camera scan は未実装。Gate B は未到達。次は TASK-204。
 
 ---
 
