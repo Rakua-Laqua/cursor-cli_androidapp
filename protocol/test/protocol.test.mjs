@@ -137,6 +137,63 @@ test('error result sanitizes messages and drops stack traces', () => {
   assert.deepEqual(parseRemoteCommandResult(json), result);
 });
 
+test('permission event and command payloads roundtrip without changing envelope semantics', () => {
+  const requested = {
+    eventId: 'evt_perm_req',
+    sessionId: 'remote_sess_123',
+    timestamp: '2026-08-17T07:00:05+09:00',
+    type: 'permission.requested',
+    payload: {
+      permissionId: 'perm_001',
+      kind: 'execute',
+      command: 'Get-ChildItem -Force',
+      risk: 'high',
+    },
+  };
+  const resolved = {
+    eventId: 'evt_perm_res',
+    sessionId: 'remote_sess_123',
+    timestamp: '2026-08-17T07:00:06+09:00',
+    type: 'permission.resolved',
+    payload: {
+      permissionId: 'perm_001',
+      decision: 'approved',
+    },
+  };
+  const approve = {
+    requestId: 'req_perm_approve',
+    sessionId: 'remote_sess_123',
+    timestamp: '2026-08-17T07:00:07+09:00',
+    type: 'permission.approve',
+    payload: {
+      permissionId: 'perm_001',
+    },
+  };
+  const reject = {
+    requestId: 'req_perm_reject',
+    sessionId: 'remote_sess_123',
+    timestamp: '2026-08-17T07:00:08+09:00',
+    type: 'permission.reject',
+    payload: {
+      permissionId: 'perm_001',
+    },
+  };
+
+  assert.deepEqual(parseRemoteEvent(serializeEvent(requested)), requested);
+  assert.deepEqual(parseRemoteEvent(serializeEvent(resolved)), resolved);
+  assert.deepEqual(parseRemoteCommand(serializeCommand(approve)), approve);
+  assert.deepEqual(parseRemoteCommand(serializeCommand(reject)), reject);
+  assert.equal(JSON.stringify(approve.payload).includes('optionId'), false);
+  assert.equal(JSON.stringify(approve.payload).includes('allow'), false);
+  assert.equal(JSON.stringify(reject.payload).includes('risk'), false);
+  assert.equal(JSON.stringify(reject.payload).includes('policy'), false);
+  const requestedFrame = parseRemoteFrame(
+    serializeRemoteFrame({ kind: 'event', event: requested }),
+  );
+  assert.equal(requestedFrame.kind, 'event');
+  assert.deepEqual(requestedFrame.event, requested);
+});
+
 test('parseRemoteCommandResult rejects inconsistent ok, error, and value states', () => {
   assert.throws(
     () =>

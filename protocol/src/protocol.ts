@@ -112,6 +112,22 @@ export interface AgentTerminalPayload extends JsonObject {
   readonly reason: string | null;
 }
 
+export interface PermissionRequestedPayload extends JsonObject {
+  readonly permissionId: string;
+  readonly kind: string;
+  readonly command: string;
+  readonly risk: 'high';
+}
+
+export interface PermissionResolvedPayload extends JsonObject {
+  readonly permissionId: string;
+  readonly decision: 'approved' | 'rejected';
+}
+
+export interface PermissionDecisionCommandPayload extends JsonObject {
+  readonly permissionId: string;
+}
+
 export interface KnownEventPayloads {
   readonly 'workspace.updated': WorkspaceUpdatedPayload;
   readonly 'session.created': SessionPayload;
@@ -124,6 +140,8 @@ export interface KnownEventPayloads {
   readonly 'agent.completed': AgentTerminalPayload;
   readonly 'agent.failed': AgentTerminalPayload;
   readonly 'agent.interrupted': AgentTerminalPayload;
+  readonly 'permission.requested': PermissionRequestedPayload;
+  readonly 'permission.resolved': PermissionResolvedPayload;
 }
 
 export interface EventEnvelope<TType extends string, TPayload extends JsonValue> {

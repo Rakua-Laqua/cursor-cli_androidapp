@@ -75,6 +75,34 @@ async function handlePrompt(id, params) {
     content: { type: 'text', text: 'thinking' },
   });
 
+  if (text === 'ASK_PERMISSION') {
+    const permission = await requestObservedPermission(sessionId);
+    if (permission.cancelled || pendingCancels.has(sessionId)) {
+      send({
+        jsonrpc: '2.0',
+        id,
+        result: { stopReason: 'cancelled' },
+      });
+      return;
+    }
+    const optionId =
+      typeof permission.optionId === 'string' && permission.optionId.length > 0
+        ? permission.optionId
+        : 'none';
+    const reply = `echo:${text}:${optionId}`;
+    const splitAt = Math.max(1, Math.ceil(reply.length / 2));
+    sendUpdate(sessionId, {
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: reply.slice(0, splitAt) },
+    });
+    sendUpdate(sessionId, {
+      sessionUpdate: 'agent_message_chunk',
+      content: { type: 'text', text: reply.slice(splitAt) },
+    });
+    send({ jsonrpc: '2.0', id, result: { stopReason: 'end_turn' } });
+    return;
+  }
+
   const cancelled = await waitForCancel(sessionId, text === 'DELAY' ? 8000 : 250);
   if (cancelled) {
     send({
@@ -96,6 +124,44 @@ async function handlePrompt(id, params) {
     content: { type: 'text', text: reply.slice(splitAt) },
   });
   send({ jsonrpc: '2.0', id, result: { stopReason: 'end_turn' } });
+}
+
+function requestObservedPermission(sessionId) {
+  return new Promise((resolve) => {
+    const peerId = `perm-${sessionId}`;
+    send({
+      jsonrpc: '2.0',
+      id: peerId,
+      method: 'session/request_permission',
+      params: {
+        sessionId,
+        toolCall: {
+          toolCallId: 'tool_perm_1',
+          title: 'Get-ChildItem -Force',
+          kind: 'execute',
+          status: 'pending',
+          rawInput: { command: 'Get-ChildItem -Force' },
+        },
+        options: [
+          { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
+          { optionId: 'allow-always', name: 'Allow always', kind: 'allow_always' },
+          { optionId: 'reject-once', name: 'Reject', kind: 'reject_once' },
+        ],
+      },
+    });
+    pendingPeer.set(peerId, (response) => {
+      const result = response.result;
+      const outcome =
+        result && typeof result === 'object' && result.outcome && typeof result.outcome === 'object'
+          ? result.outcome
+          : undefined;
+      resolve({
+        optionId: typeof outcome?.optionId === 'string' ? outcome.optionId : undefined,
+        error: response.error ?? null,
+        cancelled: pendingCancels.has(sessionId),
+      });
+    });
+  });
 }
 
 const pendingPeer = new Map();

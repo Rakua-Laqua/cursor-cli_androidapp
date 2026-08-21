@@ -55,6 +55,7 @@ export class Daemon {
       store,
     );
 
+    let sessionAdapter: AcpSessionAdapter | undefined;
     const acpProcess = await AcpProcess.spawn({
       command: resolved.command,
       args: resolved.args,
@@ -69,16 +70,19 @@ export class Daemon {
         : {}),
       ...(options.acp?.onIncomingRequest !== undefined
         ? { onIncomingRequest: options.acp.onIncomingRequest }
-        : {}),
+        : {
+            onIncomingRequest: (request) => {
+              if (sessionAdapter === undefined) {
+                return Promise.reject(new Error(`Method not found: ${request.method}`));
+              }
+              return sessionAdapter.handleIncomingRequest(request);
+            },
+          }),
     });
 
     try {
-      return new Daemon(
-        acpProcess,
-        new AcpSessionAdapter(acpProcess, workspaceManager, store),
-        workspaceManager,
-        new PairingManager(store),
-      );
+      sessionAdapter = new AcpSessionAdapter(acpProcess, workspaceManager, store);
+      return new Daemon(acpProcess, sessionAdapter, workspaceManager, new PairingManager(store));
     } catch (error) {
       await acpProcess.shutdown();
       throw error;

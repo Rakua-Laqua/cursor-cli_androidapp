@@ -1,5 +1,23 @@
 # CHANGELOG
 
+## [1.8.0] - 2026-08-22
+
+### 追加
+
+- Permission Flow。実 ACP の `session/request_permission` を Android の approval card に出し、Approve / Reject のあと実行結果まで追える。Approve は Daemon が保持した `allow_once` だけを ACP に返す。Reject、timeout、cancel、invalid、非 running session、ACP 終了は `reject_once` または fail-closed。`allow_always` は選ばない。Android は `permissionId` だけで相関し、optionId / policy は送れない。決定中の二重送信を防ぐ。session status と terminal まで追跡する。
+
+### 変更
+
+- パッケージ版 1.8.0、Android `versionCode` 21 / `versionName` 1.8.0。
+
+### セキュリティ
+
+- 権限判定の最終 authority は Daemon。今回の実機確認は localhost `ws://` と adb reverse であり、TLS・インターネット公開・unattended dangerous execution・allow-always は含まない。
+
+### テスト
+
+- `npm test` は protocol 13 / daemon 89 / relay 8 全 pass。targeted Prettier pass。Gradle `testDebugUnitTest assembleDebug lintDebug` pass。実機 SM-S928Q Android 16 で Approve と Reject の両経路から completed まで確認。詳細は `docs/implementation_status.md`。
+
 ## [1.7.1] - 2026-08-22
 
 ### 修正

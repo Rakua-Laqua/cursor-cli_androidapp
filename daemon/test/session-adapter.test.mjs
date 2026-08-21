@@ -347,3 +347,234 @@ test('send and load are rejected while a prompt is in progress', async () => {
     assert.equal(terminalEvents(events)[0].type, 'agent.interrupted');
   });
 });
+
+function permissionCommand(type, sessionId, permissionId, requestId = `req-${type}`) {
+  return parseRemoteCommand(
+    serializeCommand({
+      requestId,
+      sessionId,
+      timestamp: new Date().toISOString(),
+      type,
+      payload: { permissionId },
+    }),
+  );
+}
+
+async function waitForPermissionRequested(events) {
+  await waitUntil(() => events.some((event) => event.type === 'permission.requested'));
+  return events.find((event) => event.type === 'permission.requested');
+}
+
+test('ASK_PERMISSION approve continues the turn with allow-once only', async () => {
+  const workspacePath = makeWorkspace();
+  await withDaemon(async (daemon) => {
+    const events = collectEvents(daemon);
+    const { created } = await createIdleSession(daemon, workspacePath);
+    const sending = daemon.sessions.send(created.remoteSessionId, 'ASK_PERMISSION');
+    const requested = await waitForPermissionRequested(events);
+    assert.equal(requested.payload.risk, 'high');
+    assert.equal(requested.payload.command, 'Get-ChildItem -Force');
+    assert.equal(requested.payload.kind, 'execute');
+    assert.equal(daemon.workspaces.require(created.workspaceId).activeSessionCount, 1);
+    assert.equal(
+      events.some(
+        (event) =>
+          event.type === 'session.status_changed' && event.payload.status === 'waiting_approval',
+      ),
+      true,
+    );
+    await daemon.sessions.handleCommand(
+      permissionCommand(
+        'permission.approve',
+        created.remoteSessionId,
+        requested.payload.permissionId,
+      ),
+    );
+    await sending;
+    assert.match(joinedAssistantText(events), /echo:ASK_PERMISSION:allow-once/);
+    assert.equal(joinedAssistantText(events).includes('allow-always'), false);
+    const resolved = events.filter((event) => event.type === 'permission.resolved');
+    assert.equal(resolved.length, 1);
+    assert.equal(resolved[0].payload.permissionId, requested.payload.permissionId);
+    assert.equal(resolved[0].payload.decision, 'approved');
+    assert.equal(terminalEvents(events).length, 1);
+    assert.equal(terminalEvents(events)[0].type, 'agent.completed');
+    assert.equal(daemon.workspaces.require(created.workspaceId).activeSessionCount, 0);
+    assert.equal(countStatus(events, 'waiting_approval'), 1);
+    assert.ok(countStatus(events, 'running') >= 2);
+  });
+});
+
+test('ASK_PERMISSION reject and cancel fail closed then finish the session', async () => {
+  const workspacePath = makeWorkspace();
+  await withDaemon(async (daemon) => {
+    const events = collectEvents(daemon);
+    const { created } = await createIdleSession(daemon, workspacePath);
+    const sending = daemon.sessions.send(created.remoteSessionId, 'ASK_PERMISSION');
+    const requested = await waitForPermissionRequested(events);
+    await daemon.sessions.handleCommand(
+      permissionCommand(
+        'permission.reject',
+        created.remoteSessionId,
+        requested.payload.permissionId,
+      ),
+    );
+    await sending;
+    assert.match(joinedAssistantText(events), /echo:ASK_PERMISSION:reject-once/);
+    assert.equal(
+      events.find((event) => event.type === 'permission.resolved')?.payload.decision,
+      'rejected',
+    );
+    assert.equal(terminalEvents(events)[0].type, 'agent.completed');
+    assert.equal(daemon.workspaces.require(created.workspaceId).activeSessionCount, 0);
+
+    const before = events.length;
+    const cancelling = daemon.sessions.send(created.remoteSessionId, 'ASK_PERMISSION');
+    await waitUntil(() =>
+      events.slice(before).some((event) => event.type === 'permission.requested'),
+    );
+    const second = events.filter((event) => event.type === 'permission.requested').at(-1);
+    await daemon.sessions.cancel(created.remoteSessionId);
+    await cancelling;
+    assert.equal(
+      events.filter((event) => event.type === 'permission.resolved').at(-1)?.payload.decision,
+      'rejected',
+    );
+    assert.equal(events.filter((event) => event.type === 'agent.interrupted').length, 1);
+    assert.equal(daemon.workspaces.require(created.workspaceId).activeSessionCount, 0);
+    assert.equal(second.payload.permissionId.length > 0, true);
+  });
+});
+
+test('permission decisions reject unknown, mismatched, and double commands without a second ACP outcome', async () => {
+  const workspacePath = makeWorkspace();
+  await withDaemon(async (daemon) => {
+    const events = collectEvents(daemon);
+    const { created } = await createIdleSession(daemon, workspacePath);
+    const sending = daemon.sessions.send(created.remoteSessionId, 'ASK_PERMISSION');
+    const requested = await waitForPermissionRequested(events);
+    const permissionId = requested.payload.permissionId;
+    await assert.rejects(
+      () =>
+        daemon.sessions.handleCommand(
+          permissionCommand('permission.approve', created.remoteSessionId, 'missing-perm'),
+        ),
+      /Unknown permission/,
+    );
+    await assert.rejects(
+      () =>
+        daemon.sessions.handleCommand(
+          permissionCommand('permission.approve', 'other-session', permissionId),
+        ),
+      /Unknown session|Permission session mismatch/,
+    );
+    await daemon.sessions.handleCommand(
+      permissionCommand('permission.approve', created.remoteSessionId, permissionId),
+    );
+    await assert.rejects(
+      () =>
+        daemon.sessions.handleCommand(
+          permissionCommand(
+            'permission.reject',
+            created.remoteSessionId,
+            permissionId,
+            'req-double',
+          ),
+        ),
+      /Permission already decided/,
+    );
+    await sending;
+    assert.equal(events.filter((event) => event.type === 'permission.resolved').length, 1);
+    assert.match(joinedAssistantText(events), /echo:ASK_PERMISSION:allow-once/);
+  });
+});
+
+test('session/prompt keeps waiting for permission beyond the default ACP request timeout', async () => {
+  const workspacePath = makeWorkspace();
+  await withDaemon(
+    async (daemon) => {
+      const events = collectEvents(daemon);
+      const { created } = await createIdleSession(daemon, workspacePath);
+      const sending = daemon.sessions.send(created.remoteSessionId, 'ASK_PERMISSION');
+      const requested = await waitForPermissionRequested(events);
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      await daemon.sessions.handleCommand(
+        permissionCommand(
+          'permission.approve',
+          created.remoteSessionId,
+          requested.payload.permissionId,
+        ),
+      );
+      await sending;
+      assert.equal(terminalEvents(events)[0].type, 'agent.completed');
+    },
+    { requestTimeoutMs: 200 },
+  );
+});
+
+test('unknown incoming ACP methods are rejected without blocking the session adapter', async () => {
+  const workspacePath = makeWorkspace();
+  await withDaemon(async (daemon) => {
+    await assert.rejects(
+      () =>
+        daemon.sessions.handleIncomingRequest({
+          id: 99,
+          method: 'cursor/ask_question',
+          params: {},
+        }),
+      /Method not found: cursor\/ask_question/,
+    );
+    const { created } = await createIdleSession(daemon, workspacePath);
+    await daemon.sessions.send(created.remoteSessionId, 'hello');
+    assert.equal(created.remoteSessionId.length > 0, true);
+  });
+});
+
+function observedPermissionParams(cursorSessionId) {
+  return {
+    sessionId: cursorSessionId,
+    toolCall: {
+      toolCallId: 'tool_perm_1',
+      title: 'Get-ChildItem -Force',
+      kind: 'execute',
+      status: 'pending',
+      rawInput: { command: 'Get-ChildItem -Force' },
+    },
+    options: [
+      { optionId: 'allow-once', name: 'Allow once', kind: 'allow_once' },
+      { optionId: 'allow-always', name: 'Allow always', kind: 'allow_always' },
+      { optionId: 'reject-once', name: 'Reject', kind: 'reject_once' },
+    ],
+  };
+}
+
+test('idle and completed sessions fail closed instead of waiting for permission', async () => {
+  const workspacePath = makeWorkspace();
+  await withDaemon(async (daemon) => {
+    const events = collectEvents(daemon);
+    const { created } = await createIdleSession(daemon, workspacePath);
+    const idleResult = await daemon.sessions.handleIncomingRequest({
+      id: 'idle-perm',
+      method: 'session/request_permission',
+      params: observedPermissionParams(created.cursorSessionId),
+    });
+    assert.deepEqual(idleResult, {
+      outcome: { outcome: 'selected', optionId: 'reject-once' },
+    });
+    assert.equal(
+      events.some((event) => event.type === 'permission.requested'),
+      false,
+    );
+
+    await daemon.sessions.send(created.remoteSessionId, 'hello');
+    const completedResult = await daemon.sessions.handleIncomingRequest({
+      id: 'done-perm',
+      method: 'session/request_permission',
+      params: observedPermissionParams(created.cursorSessionId),
+    });
+    assert.deepEqual(completedResult, {
+      outcome: { outcome: 'selected', optionId: 'reject-once' },
+    });
+    assert.equal(events.filter((event) => event.type === 'permission.requested').length, 0);
+  });
+});

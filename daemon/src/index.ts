@@ -14,6 +14,16 @@ export {
 export { AcpSessionAdapter, type CreateSessionInput } from './session/session-adapter.js';
 export { mapAcpSessionUpdate, type MappedSessionEvent } from './session/map-session-update.js';
 export {
+  MAX_PERMISSION_COMMAND_LENGTH,
+  MAX_PERMISSION_KIND_LENGTH,
+  PERMISSION_TIMEOUT_MS,
+  PermissionBridge,
+  type PermissionBridgeOptions,
+  type PermissionDecision,
+  type PermissionRequestedNotice,
+  type PermissionResolvedNotice,
+} from './permissions/permission-bridge.js';
+export {
   WorkspaceManager,
   WorkspaceNotFoundError,
   type WorkspaceManagerOptions,

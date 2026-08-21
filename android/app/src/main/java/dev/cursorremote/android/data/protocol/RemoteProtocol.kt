@@ -115,6 +115,24 @@ sealed class ChatEvent {
         override val timestamp: String,
         val reason: String?,
     ) : ChatEvent()
+
+    data class PermissionRequested(
+        override val eventId: String,
+        override val sessionId: String,
+        override val timestamp: String,
+        val permissionId: String,
+        val kind: String,
+        val command: String,
+        val risk: String,
+    ) : ChatEvent()
+
+    data class PermissionResolved(
+        override val eventId: String,
+        override val sessionId: String,
+        override val timestamp: String,
+        val permissionId: String,
+        val decision: String,
+    ) : ChatEvent()
 }
 
 sealed class IncomingRemoteFrame {
@@ -143,6 +161,8 @@ object RemoteProtocol {
             "agent.completed",
             "agent.failed",
             "agent.interrupted",
+            "permission.requested",
+            "permission.resolved",
         )
 
     fun parsePairingQrPayload(
@@ -371,6 +391,10 @@ object RemoteProtocol {
 
     fun sessionCancelPayload(): JsonObject = buildJsonObject {}
 
+    fun permissionApprovePayload(permissionId: String): JsonObject = permissionDecisionPayload(permissionId)
+
+    fun permissionRejectPayload(permissionId: String): JsonObject = permissionDecisionPayload(permissionId)
+
     fun parseChatEvent(event: RemoteEvent): ChatEvent? {
         if (event.type !in CHAT_EVENT_TYPES) {
             return null
@@ -432,6 +456,28 @@ object RemoteProtocol {
                     timestamp = event.timestamp,
                     reason = parseAgentTerminalPayload(event.payload),
                 )
+            "permission.requested" -> {
+                val parsed = parsePermissionRequestedPayload(event.payload)
+                ChatEvent.PermissionRequested(
+                    eventId = event.eventId,
+                    sessionId = sessionId,
+                    timestamp = event.timestamp,
+                    permissionId = parsed.permissionId,
+                    kind = parsed.kind,
+                    command = parsed.command,
+                    risk = parsed.risk,
+                )
+            }
+            "permission.resolved" -> {
+                val parsed = parsePermissionResolvedPayload(event.payload)
+                ChatEvent.PermissionResolved(
+                    eventId = event.eventId,
+                    sessionId = sessionId,
+                    timestamp = event.timestamp,
+                    permissionId = parsed.permissionId,
+                    decision = parsed.decision,
+                )
+            }
             else -> null
         }
     }
@@ -547,6 +593,45 @@ object RemoteProtocol {
     private fun parseAgentTerminalPayload(payload: JsonElement): String? {
         val root = parseObject(payload, "agent terminal")
         return requireNullableString(root, "reason")
+    }
+
+    private data class ParsedPermissionRequested(
+        val permissionId: String,
+        val kind: String,
+        val command: String,
+        val risk: String,
+    )
+
+    private data class ParsedPermissionResolved(
+        val permissionId: String,
+        val decision: String,
+    )
+
+    private fun parsePermissionRequestedPayload(payload: JsonElement): ParsedPermissionRequested {
+        val root = parseObject(payload, "permission.requested")
+        return ParsedPermissionRequested(
+            permissionId = requireNonEmptyString(root, "permissionId"),
+            kind = requireStringField(root, "kind"),
+            command = requireStringField(root, "command"),
+            risk = requireNonEmptyString(root, "risk"),
+        )
+    }
+
+    private fun parsePermissionResolvedPayload(payload: JsonElement): ParsedPermissionResolved {
+        val root = parseObject(payload, "permission.resolved")
+        val decision = requireNonEmptyString(root, "decision")
+        if (decision != "approved" && decision != "rejected") {
+            throw ProtocolParseError("decision must be approved or rejected.")
+        }
+        return ParsedPermissionResolved(
+            permissionId = requireNonEmptyString(root, "permissionId"),
+            decision = decision,
+        )
+    }
+
+    private fun permissionDecisionPayload(permissionId: String): JsonObject {
+        requireNonEmpty(permissionId, "permissionId")
+        return buildJsonObject { put("permissionId", permissionId) }
     }
 
     private fun parseResultRecord(value: JsonObject): RemoteCommandResult {

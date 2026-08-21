@@ -7,7 +7,7 @@
 - 対象リポジトリ: `Rakua-Laqua/cursor-cli_androidapp`
 - ブランチ: `main`
 - 直前リリース基準（v1.3.0）: `c7bff3137511396d8a86d27a341fcddb70f8b316`（`v1.3.0にアップデート`）
-- パッケージ版: `1.7.1`（Android `versionCode` 20 / `versionName` 1.7.1）
+- パッケージ版: `1.8.0`（Android `versionCode` 21 / `versionName` 1.8.0）
 
 この文書は「いまどこまで動くか」の正本である。設計の正本は仕様書、作業順の正本は実装計画である。計画書の未着手タスクを消さない。完了扱いにできるのはリリース済みの範囲だけである。
 
@@ -15,7 +15,7 @@
 
 ## 1. いまの結論
 
-**Cursor Desktop なしで、PC 上の Local Daemon だけから Workspace / Session を操作し、Android からメモリ内 Chat を送受信できる。** Relay 経由の Command / Event 中継も localhost では動く。Device Pairing は v1.4.0、Android Skeleton は v1.5.0、Workspace / Session UI は v1.6.0、Chat は v1.7.0。QR カメラ、TLS、履歴永続化 / 再接続復元、Gate B は未完。次は Android 実機の Gate B。
+**Cursor Desktop なしで、PC 上の Local Daemon だけから Workspace / Session を操作し、Android からメモリ内 Chat を送受信し、実 ACP の permission を Approve / Reject できる。** Relay 経由の Command / Event 中継も localhost では動く。Device Pairing は v1.4.0、Android Skeleton は v1.5.0、Workspace / Session UI は v1.6.0、Chat は v1.7.0、Permission Flow は v1.8.0。QR カメラ、TLS、履歴永続化 / 再接続復元は未完。次は TASK-301 Diff Pipeline。
 
 | 区分 | 状態 |
 | --- | --- |
@@ -25,11 +25,13 @@
 | TASK-201 Device Pairing | **完了・v1.4.0 でリリース済み** |
 | TASK-202 Android Application Skeleton | **実装済み・v1.5.0** |
 | TASK-203 Workspace / Session UI | **実装済み・v1.6.0 / compile 修正 v1.6.1** |
-| TASK-204 Chat Streaming UI | **実装済み・v1.7.0** |
-| Gate B（Android 実機の Chat Streaming） | **未到達** |
-| Phase 3 以降（Diff / Voice / Permission UI など） | **未着手** |
+| TASK-204 Chat Streaming UI | **実装済み・v1.7.0**。Gate B 通過 |
+| Gate B（Android 実機の Chat Streaming） | **通過**。2026-08-22、SM-S928Q / Android 16。詳細は §8 |
+| TASK-300 Permission Flow | **完了・v1.8.0**。Gate C 通過 |
+| Gate C（Permission Flow） | **通過**。詳細は §8 |
+| Phase 3 以降 | TASK-300 のみ完了。次は TASK-301 Diff Pipeline |
 
-次の作業は Gate B（Android 実機の Chat Streaming）である。
+次の作業は TASK-301 Diff Pipeline である。
 
 ---
 
@@ -56,13 +58,17 @@
 
 - 選択中 Session への Prompt と逐次応答（メモリ内 Chat）。履歴永続化 / 再接続復元はない。
 
+### 動く（v1.8.0）
+
+- 実 ACP `session/request_permission` の Android approval card。Approve は保存済み `allow_once`、Reject / timeout / cancel / invalid / non-running / exit は `reject_once` または fail-closed。`allow_always` は選ばない。Android は `permissionId` のみ。
+
 ### まだない
 
 - Pairing の CLI / QR 表示 UI（`remote-dev` に pairing サブコマンドはない）。
 - Android の QR カメラ。
 - TLS / インターネット公開用の認証。`/machine` は localhost の非認証 `ws://` のまま。
 - Chat 履歴の永続化と再接続復元。
-- Push、Account Usage、File content 保存、Diff UI、Voice、Permission UI。
+- Push、Account Usage、File content 保存、Diff UI、Voice。
 - 単発 `session cancel`（別プロセスからの停止は未実測のため非公開）。
 
 ---
@@ -72,6 +78,8 @@
 状態の意味:
 
 - **リリース済み**: パッケージ版 v1.4.0 までに含まれるバックエンド。v1.3.0 の基準コミットは `c7bff3137511396d8a86d27a341fcddb70f8b316`。
+- **実装済み v1.8.0**: TASK-300 Permission Flow。
+- **実装済み v1.7.0**: TASK-204 Chat Streaming UI。
 - **実装済み v1.6.0**: TASK-203 Workspace / Session UI。
 - **実装済み v1.5.0**: TASK-202 Android Application Skeleton。
 - **未着手**: 計画書の Scope どおり、実装していない。
@@ -83,7 +91,7 @@
 | TASK-000 | `android/` `daemon/` `relay/` `protocol/` `docs/` の module boundary、format / lint | リリース済み |
 | TASK-001 | Remote Protocol の Event / Command 型と JSON 境界 | リリース済み。v1.3.0 で `command` / `event` / `result` frame を追加 |
 
-Android は TASK-204 まで。Gate B は未実施。
+Android は TASK-300 まで。Gate B / C は通過。
 
 ### Phase 1 — Cursor CLI Local Core（Milestone 1）
 
@@ -115,13 +123,13 @@ npm run remote-dev -- e2e
 | TASK-201 | Device Pairing | **リリース済み v1.4.0** |
 | TASK-202 | Android Application Skeleton | **実装済み v1.5.0** |
 | TASK-203 | Workspace / Session UI | **実装済み v1.6.0 / compile 修正 v1.6.1** |
-| TASK-204 | Chat Streaming UI | **実装済み v1.7.0** |
+| TASK-204 | Chat Streaming UI | **実装済み v1.7.0**。Gate B 通過 |
 
-Phase 2 の Chat は v1.7.0。Gate B は Android 実機の Chat Streaming まで通過しない。
+Phase 2 の Chat は v1.7.0。Gate B は 2026-08-22 に通過。実機記録は §8。
 
 ### Phase 3 以降
 
-計画書どおり未着手。Gate C（Permission Flow）と Gate D（Audio Routing Spike）にも未到達。
+TASK-300 Permission Flow は **v1.8.0 で完了**。Gate C 通過。TASK-301 Diff Pipeline 以降と Gate D は未着手。
 
 ---
 
@@ -267,7 +275,6 @@ Android Application Skeleton。Protocol / Daemon / Relay の公開挙動は変�
 
 - QR カメラ / pairing UI
 - TLS、Relay 自動接続
-- Gate B（Android 実機の Chat Streaming）
 
 v1.5.0 時点の次は TASK-203。
 
@@ -275,13 +282,19 @@ v1.5.0 時点の次は TASK-203。
 
 ## 7. TASK-203（v1.6.0 実装・v1.6.1 compile 修正）
 
-Android だけで Pairing JSON / 再認証、Workspace / Session 一覧、New Session、過去 Session 再開。v1.6.1 は Compose `weight` 明示 import の compile 修正のみ。Camera / Gate B は未完。Chat は v1.7.0。
+Android だけで Pairing JSON / 再認証、Workspace / Session 一覧、New Session、過去 Session 再開。v1.6.1 は Compose `weight` 明示 import の compile 修正のみ。Camera は未完。Chat は v1.7.0。Gate B は §8。
 
 ---
 
 ## 7.1 TASK-204（v1.7.0）
 
-選択中 Session へ Prompt を送り、User / Assistant を逐次表示し、status / error / completed / stop を扱う。会話はメモリ内のみ。履歴永続化 / 再接続復元、QR カメラ、TLS、Android 実機 Gate B は未完。
+選択中 Session へ Prompt を送り、User / Assistant を逐次表示し、status / error / completed / stop を扱う。会話はメモリ内のみ。履歴永続化 / 再接続復元、QR カメラ、TLS は未完。Gate B 通過の実機記録は §8。
+
+---
+
+## 7.2 TASK-300（v1.8.0）
+
+実 ACP `session/request_permission` を Daemon が最終 authority として扱い、Android に approval card を出す。Approve は保存済み `allow_once`、Reject / timeout / cancel / invalid / non-running / exit は `reject_once` または fail-closed。`allow_always` は選ばない。Android は `permissionId` だけで相関し、optionId / policy は送れない。Gate C 通過の実機記録は §8。
 
 ---
 
@@ -295,19 +308,25 @@ Android だけで Pairing JSON / 再認証、Workspace / Session 一覧、New Se
 | TASK-200 `npm test` / lint / format | 成功 | v1.3.0 リリース時 |
 | TASK-201 `npm run build` | 成功 | v1.4.0 |
 | TASK-201 `npm test` / lint / format:check | 成功 | v1.4.0 リリース時 |
-| Android `assembleDebug` / `testDebugUnitTest` | GitHub Actions CI | v1.6.1 成功済み。v1.7.0 は disconnect 中 in-flight `session.send` テスト競合で失敗。v1.7.1 で競合を修正し、GitHub Actions で再検証 |
-| Android 実機の Relay / Pairing / Chat | 未実施 | Gate B 未到達 |
+| Android `assembleDebug` / `testDebugUnitTest` | GitHub Actions CI / ローカル Gradle | v1.6.1 成功済み。v1.7.0 は disconnect 中 in-flight `session.send` テスト競合で失敗。v1.7.1 で競合を修正。v1.8.0 は `:app:testDebugUnitTest :app:assembleDebug :app:lintDebug` BUILD SUCCESSFUL |
+| `npm test` v1.8.0 | 成功 | protocol 13 / daemon 89 / relay 8、fail 0。targeted Prettier pass |
+| Android 実機 Chat（Gate B） | 通過（2026-08-22） | SM-S928Q / Android 16。下記 |
+| Android 実機 Permission（Gate C） | 通過（2026-08-22） | SM-S928Q / Android 16。下記 |
+
+Gate B（2026-08-22、SM-S928Q / Android 16）: localhost Relay と adb reverse。既存 pairing の再認証、Workspace / Session resume、terminal 前の逐次 Assistant 表示、Stop 後の `interrupted` / `stopped` を確認した。TLS とインターネット公開は使っていない。
+
+Gate C（2026-08-22、同端末）: `Get-ChildItem -Force` の `permission.requested` / approval card / high risk を確認した。Approve は `waiting_approval` → `permission.resolved` approved → コマンド結果 `.git` → completed。Reject は `permission.resolved` rejected → 非実行の Assistant 応答 → completed。Daemon が最終 authority。`allow_once` / `reject_once` 限定、fail-closed。Android は optionId / policy を送れない。検証後、Android keyboard subtype は日本語へ復元、adb reverse 削除、runner / ACP 停止、port 8787 free。
 
 ---
 
 ## 9. モジュール別の現状
 
-| モジュール | 実装済み v1.7.0 | 未着手 |
+| モジュール | 実装済み v1.8.0 | 未着手 |
 | --- | --- | --- |
-| `protocol/` | Event / Command 型、Remote frame、Pairing 型・証明・QR payload | Android 向け追加画面用の型は不要な範囲で増やさない |
-| `daemon/` | ACP、Workspace、metadata、`remote-dev`、Relay outbound、`PairingManager`、device 永続化 | pairing CLI、Permission 実処理 |
+| `protocol/` | Event / Command 型、Remote frame、Pairing 型・証明・QR payload、permission requested/resolved と permissionId のみの approve/reject | Android 向け追加画面用の型は不要な範囲で増やさない |
+| `daemon/` | ACP、Workspace、metadata、`remote-dev`、Relay outbound、`PairingManager`、device 永続化、PermissionBridge（fail-closed） | pairing CLI |
 | `relay/` | WebSocket routing / correlation / heartbeat、`/client` の pairing ゲート | TLS、Push |
-| `android/` | TASK-204 Chat（メモリ内） | QR カメラ、履歴永続化 / 再接続復元 |
+| `android/` | TASK-204 Chat（メモリ内）、TASK-300 Permission approval card | QR カメラ、履歴永続化 / 再接続復元 |
 | `docs/` | 仕様、計画、ACP 実測、Local E2E、本ファイル | — |
 
 ---
@@ -317,7 +336,7 @@ Android だけで Pairing JSON / 再認証、Workspace / Session 一覧、New Se
 計画書と Gate を崩さない。
 
 ```text
-Gate B まで Android 実機で Chat が動くこと
+TASK-301 Diff Pipeline
 ```
 
-TASK-204 は v1.7.0。Camera / TLS / 履歴永続化 / 再接続復元 / Gate B は未完。
+TASK-300 は v1.8.0。Camera / TLS / 履歴永続化 / 再接続復元は未完。

@@ -9,7 +9,8 @@ import type {
   SessionStatus,
 } from '@cursor-remote/protocol';
 
-import type { AcpNotification, AcpProcess } from '../acp/process.js';
+import type { AcpIncomingRequest, AcpNotification, AcpProcess } from '../acp/process.js';
+import { PermissionBridge } from '../permissions/permission-bridge.js';
 import type { MetadataStore, PersistedSession } from '../store/metadata-store.js';
 import type { WorkspaceManager } from '../workspace/workspace-manager.js';
 import {
@@ -55,19 +56,27 @@ export class AcpSessionAdapter {
   private readonly sessions = new Map<string, TrackedSession>();
   private readonly remoteIdByCursorId = new Map<string, string>();
   private readonly listeners = new Set<(event: KnownRemoteEvent) => void>();
+  private readonly permissions: PermissionBridge;
 
   constructor(
     private readonly acp: AcpProcess,
     private readonly workspaces: WorkspaceManager,
     private readonly store?: MetadataStore,
   ) {
+    this.permissions = new PermissionBridge({
+      resolveRemoteSessionId: (cursorSessionId) =>
+        this.resolveRunningRemoteSessionId(cursorSessionId),
+      onRequested: (notice) => this.handlePermissionRequested(notice),
+      onResolved: (notice) => this.handlePermissionResolved(notice),
+    });
     this.acp.onNotification((notification) => this.handleNotification(notification));
     this.acp.onExit((info) => {
+      this.permissions.rejectAllPending();
       if (info.expected) {
         return;
       }
       for (const session of this.sessions.values()) {
-        if (session.status === 'running') {
+        if (session.status === 'running' || session.status === 'waiting_approval') {
           this.finish(session, 'failed', 'agent.failed', 'ACP process exited');
         }
       }
@@ -150,7 +159,15 @@ export class AcpSessionAdapter {
 
   async cancel(remoteSessionId: string): Promise<void> {
     const session = this.requireSession(remoteSessionId);
+    this.permissions.rejectPendingForSession(remoteSessionId);
     this.acp.notify('session/cancel', { sessionId: session.cursorSessionId });
+  }
+
+  handleIncomingRequest(request: AcpIncomingRequest): Promise<unknown> {
+    if (request.method !== 'session/request_permission') {
+      return Promise.reject(new Error(`Method not found: ${request.method}`));
+    }
+    return this.permissions.handleRequestPermission(request.params);
   }
 
   async handleCommand(
@@ -175,6 +192,18 @@ export class AcpSessionAdapter {
         return undefined;
       case 'session.cancel':
         await this.cancel(readCommandSessionId(command.sessionId));
+        return undefined;
+      case 'permission.approve':
+        this.permissions.approve(
+          readCommandSessionId(command.sessionId),
+          readCommandString(command.payload, 'permissionId'),
+        );
+        return undefined;
+      case 'permission.reject':
+        this.permissions.reject(
+          readCommandSessionId(command.sessionId),
+          readCommandString(command.payload, 'permissionId'),
+        );
         return undefined;
       default:
         throw new Error(`Unsupported command type: ${command.type}`);
@@ -221,10 +250,14 @@ export class AcpSessionAdapter {
     this.emit(session.remoteSessionId, 'assistant.status', { status: 'running' });
 
     try {
-      const result = await this.acp.request('session/prompt', {
-        sessionId: session.cursorSessionId,
-        prompt: [{ type: 'text', text }],
-      });
+      const result = await this.acp.request(
+        'session/prompt',
+        {
+          sessionId: session.cursorSessionId,
+          prompt: [{ type: 'text', text }],
+        },
+        0,
+      );
       const stopReason = readStopReason(result);
       if (stopReason === 'cancelled') {
         this.finish(session, 'interrupted', 'agent.interrupted', stopReason);
@@ -247,16 +280,74 @@ export class AcpSessionAdapter {
     if (TERMINAL_SESSION_STATUSES.has(session.status)) {
       return;
     }
-    const wasRunning = session.status === 'running';
+    this.permissions.rejectPendingForSession(session.remoteSessionId);
+    if (TERMINAL_SESSION_STATUSES.has(session.status)) {
+      return;
+    }
+    const wasInPrompt = session.status === 'running' || session.status === 'waiting_approval';
     session.status = status;
     session.updatedAt = nowIso();
     this.emitStatus(session, status);
-    if (wasRunning) {
+    if (wasInPrompt) {
       this.workspaces.adjustActiveSessionCount(session.workspaceId, -1);
     }
     const payload: AgentTerminalPayload = { reason };
     this.emit(session.remoteSessionId, type, payload);
     this.persist();
+  }
+
+  private resolveRunningRemoteSessionId(cursorSessionId: string): string | undefined {
+    const remoteSessionId = this.remoteIdByCursorId.get(cursorSessionId);
+    if (remoteSessionId === undefined) {
+      return undefined;
+    }
+    const session = this.sessions.get(remoteSessionId);
+    if (session === undefined || session.status !== 'running') {
+      return undefined;
+    }
+    return remoteSessionId;
+  }
+
+  private handlePermissionRequested(notice: {
+    readonly permissionId: string;
+    readonly remoteSessionId: string;
+    readonly kind: string;
+    readonly command: string;
+    readonly risk: 'high';
+  }): void {
+    const session = this.sessions.get(notice.remoteSessionId);
+    if (session === undefined || TERMINAL_SESSION_STATUSES.has(session.status)) {
+      return;
+    }
+    session.status = 'waiting_approval';
+    session.updatedAt = nowIso();
+    this.emitStatus(session, 'waiting_approval');
+    this.emit(session.remoteSessionId, 'permission.requested', {
+      permissionId: notice.permissionId,
+      kind: notice.kind,
+      command: notice.command,
+      risk: notice.risk,
+    });
+  }
+
+  private handlePermissionResolved(notice: {
+    readonly permissionId: string;
+    readonly remoteSessionId: string;
+    readonly decision: 'approved' | 'rejected';
+  }): void {
+    const session = this.sessions.get(notice.remoteSessionId);
+    if (session === undefined) {
+      return;
+    }
+    if (session.status === 'waiting_approval') {
+      session.status = 'running';
+      session.updatedAt = nowIso();
+      this.emitStatus(session, 'running');
+    }
+    this.emit(session.remoteSessionId, 'permission.resolved', {
+      permissionId: notice.permissionId,
+      decision: notice.decision,
+    });
   }
 
   private handleNotification(notification: AcpNotification): void {
@@ -432,7 +523,7 @@ function readCommandNullableString(payload: JsonObject, key: string): string | n
 }
 
 function assertPromptNotInProgress(session: TrackedSession): void {
-  if (session.status === 'running') {
+  if (session.status === 'running' || session.status === 'waiting_approval') {
     throw new Error('Session already has a prompt in progress');
   }
 }

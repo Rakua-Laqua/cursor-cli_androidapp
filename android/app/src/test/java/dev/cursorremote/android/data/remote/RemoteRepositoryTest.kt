@@ -151,6 +151,26 @@ class RemoteRepositoryTest {
         }
 
     @Test
+    fun permissionCommandsUsePermissionIdOnlyAndStayOnTheSession() =
+        withRepository { repo, transport ->
+            repo.authenticate("ws://127.0.0.1:8787", "pc-1", "device-1")
+            hangSessionSend(transport)
+            repo.approvePermission("sess-1", "perm-1")
+            val approve = lastCommand(transport, "permission.approve")
+            assertTrue(approve.contains("\"sessionId\":\"sess-1\""))
+            assertTrue(approve.contains("\"permissionId\":\"perm-1\""))
+            assertTrue(approve.contains("\"type\":\"permission.approve\""))
+            assertEquals(false, approve.contains("optionId"))
+            assertEquals(false, approve.contains("allow-always"))
+            repo.rejectPermission("sess-1", "perm-1")
+            val reject = lastCommand(transport, "permission.reject")
+            assertTrue(reject.contains("\"sessionId\":\"sess-1\""))
+            assertTrue(reject.contains("\"permissionId\":\"perm-1\""))
+            assertEquals(false, reject.contains("risk"))
+            assertEquals(false, reject.contains("policy"))
+        }
+
+    @Test
     fun disconnectFailsInFlightSessionSend() =
         withRepository { repo, transport ->
             repo.authenticate("ws://127.0.0.1:8787", "pc-1", "device-1")

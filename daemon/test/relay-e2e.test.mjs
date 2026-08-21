@@ -292,3 +292,89 @@ test('websocket mock ACP e2e: commands, streaming, cancel, restart, continuation
     await stopAttached(second);
   }
 });
+
+test('websocket relays permission requested and approve command correlation', async (t) => {
+  const allowedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'relay-perm-root-'));
+  const workspacePath = path.join(allowedRoot, 'project');
+  fs.mkdirSync(workspacePath);
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'relay-perm-state-'));
+
+  const server = await RelayServer.listen({
+    host: '127.0.0.1',
+    port: 0,
+    heartbeatIntervalMs: 0,
+  });
+  t.after(() => server.close());
+
+  const machineId = 'pc-perm';
+  const keys = generateP256KeyPair();
+  const opened = await openClient(server.clientUrl(machineId));
+  const client = opened.socket;
+  const frames = opened.frames;
+  t.after(() => closeWs(client));
+
+  const daemon = await Daemon.start({
+    acp: {
+      ...mockLaunch(),
+      shutdownTimeoutMs: 1000,
+    },
+    workspaces: { allowedRoots: [allowedRoot] },
+    stateDir,
+  });
+  t.after(() => daemon.stop());
+  const connection = await attachDaemonToRelay(daemon, server.machineUrl(machineId));
+  t.after(() => connection.close());
+
+  const qr = daemon.pairing.createQrPayload({
+    relayUrl: `ws://127.0.0.1:${server.port}`,
+    machineId,
+  });
+  await pairDevice(client, frames, qr, keys, machineId);
+  const registered = await rpc(client, frames, 'workspace.register', { path: workspacePath });
+  const created = await rpc(client, frames, 'session.create', {
+    workspaceId: registered.workspaceId,
+    initialPrompt: '',
+    title: 'perm',
+  });
+  const sendStart = frames.length;
+  const sending = rpc(
+    client,
+    frames,
+    'session.send',
+    { text: 'ASK_PERMISSION' },
+    created.remoteSessionId,
+  );
+  await waitUntil(() =>
+    eventsFrom(frames, sendStart).some((event) => event.type === 'permission.requested'),
+  );
+  const requested = eventsFrom(frames, sendStart).find(
+    (event) => event.type === 'permission.requested',
+  );
+  assert.equal(requested.sessionId, created.remoteSessionId);
+  assert.equal(requested.payload.permissionId.length > 0, true);
+  assert.equal(requested.payload.risk, 'high');
+  assert.equal(JSON.stringify(requested.payload).includes('allow-always'), false);
+  await rpc(
+    client,
+    frames,
+    'permission.approve',
+    { permissionId: requested.payload.permissionId },
+    created.remoteSessionId,
+  );
+  assert.equal(await sending, null);
+  const streamed = eventsFrom(frames, sendStart);
+  assert.equal(
+    streamed.some(
+      (event) =>
+        event.type === 'permission.resolved' &&
+        event.payload.permissionId === requested.payload.permissionId &&
+        event.payload.decision === 'approved',
+    ),
+    true,
+  );
+  assert.match(joinedAssistantText(streamed), /echo:ASK_PERMISSION:allow-once/);
+  assert.equal(
+    streamed.some((event) => event.type === 'agent.completed'),
+    true,
+  );
+});

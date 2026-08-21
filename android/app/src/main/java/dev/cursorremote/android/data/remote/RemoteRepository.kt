@@ -109,6 +109,14 @@ class RemoteRepository(
         sendCommand("session.cancel", RemoteProtocol.sessionCancelPayload(), sessionId, timeoutMs = requestTimeoutMs)
     }
 
+    suspend fun approvePermission(sessionId: String, permissionId: String) {
+        sendCommand("permission.approve", RemoteProtocol.permissionApprovePayload(permissionId), sessionId)
+    }
+
+    suspend fun rejectPermission(sessionId: String, permissionId: String) {
+        sendCommand("permission.reject", RemoteProtocol.permissionRejectPayload(permissionId), sessionId)
+    }
+
     fun disconnect() {
         reset(RemoteConnectionState.Disconnected, RemoteRepositoryException("Disconnected"), disconnectSocket = true)
     }

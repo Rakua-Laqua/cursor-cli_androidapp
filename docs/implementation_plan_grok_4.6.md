@@ -360,7 +360,7 @@ workspace select
 
 # Phase 2 — Relay + Android Text Remote
 
-2026-08-22 時点: TASK-200 は v1.3.0、TASK-201 は v1.4.0、TASK-202 は v1.5.0、TASK-203 は v1.6.0、TASK-204 は v1.7.0 で実装済み。Gate B は未完。詳細は `docs/implementation_status.md`。Gate B〜D は維持する。
+2026-08-22 時点: TASK-200 は v1.3.0、TASK-201 は v1.4.0、TASK-202 は v1.5.0、TASK-203 は v1.6.0、TASK-204 は v1.7.0 で実装済み。Gate B は 2026-08-22 に通過。詳細は `docs/implementation_status.md`。Gate B〜D は維持する。
 
 ## TASK-200: Relay WebSocket Core
 
@@ -495,7 +495,7 @@ AndroidからPromptを送り、Cursorの応答が逐次表示される。
 
 ### 実施記録
 
-2026-08-22、v1.7.0 で実装。選択中 Session への Prompt、逐次応答、status / error / completed / stop。会話はメモリ内のみ。履歴永続化 / 再接続復元、QR カメラ、TLS、Android 実機 Gate B は未完。
+2026-08-22、v1.7.0 で実装。選択中 Session への Prompt、逐次応答、status / error / completed / stop。会話はメモリ内のみ。2026-08-22、SM-S928Q / Android 16 の localhost Relay + adb reverse で Gate B 通過。履歴永続化 / 再接続復元、QR カメラ、TLS は未完。詳細は `docs/implementation_status.md`。
 
 ---
 
@@ -521,6 +521,10 @@ AndroidはDaemonのpolicyを突破できない。
 ### 完了条件
 
 実際のCursor approval requestをAndroidで確認し、Approve / Rejectして実行結果まで追える。
+
+### 実施記録
+
+2026-08-22、v1.8.0 で実装。Daemon が ACP `session/request_permission` の最終 authority。Android は `permissionId` のみ。`allow_once` / `reject_once` 限定、fail-closed、`allow_always` は選ばない。Gate C 通過。詳細は `docs/implementation_status.md`。
 
 ---
 
@@ -1078,7 +1082,7 @@ Cursor CLI / ACP側が成立しない状態でAndroidを作ると、UIが未確�
 
 TASK-204 Chat StreamingがAndroid実機で動くまでDiff / Voiceへ進まない。
 
-2026-08-22: TASK-204 は v1.7.0。Android 実機確認は未実施のため Gate B は未通過。
+2026-08-22: TASK-204 は v1.7.0。SM-S928Q / Android 16、localhost Relay + adb reverse で Chat Streaming を確認し Gate B を通過。詳細は `docs/implementation_status.md`。
 
 理由:
 Remote通信とSession lifecycleを先に安定させる。
@@ -1086,6 +1090,8 @@ Remote通信とSession lifecycleを先に安定させる。
 ## Gate C
 
 TASK-300 Permission Flowが完成するまで危険な自動実行機能を追加しない。
+
+2026-08-22: TASK-300 は v1.8.0。SM-S928Q / Android 16 で Approve / Reject の両経路から completed まで確認し Gate C を通過。詳細は `docs/implementation_status.md`。
 
 ## Gate D
 

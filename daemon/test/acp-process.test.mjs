@@ -79,8 +79,9 @@ test('unknown incoming ACP request is answered so the agent does not block', asy
   await withDaemon({}, async (daemon) => {
     const result = await daemon.acp.request('peer-request');
     assert.equal(result.peerId, 'peer-1');
-    assert.equal(result.error.code, -32601);
-    assert.match(result.error.message, /session\/request_permission/);
+    assert.equal(result.result, null);
+    assert.equal(result.error.code, -32603);
+    assert.match(result.error.message, /Invalid permission request/);
   });
 });
 
@@ -163,6 +164,35 @@ test('timed out requests are cleaned up from the pending map', async () => {
     await assert.rejects(() => daemon.acp.request('hang'), /timed out/);
     const result = await daemon.acp.request('echo', { ok: true });
     assert.deepEqual(result, { params: { ok: true } });
+  });
+});
+
+test('per-request timeout override can disable timeout without changing the default', async () => {
+  await withDaemon({ requestTimeoutMs: 200 }, async (daemon) => {
+    const hung = daemon.acp.request('hang', undefined, 0);
+    await new Promise((resolve) => setTimeout(resolve, 350));
+    await assert.rejects(() => daemon.acp.request('hang'), /timed out/);
+    const echoed = await daemon.acp.request('echo', { ok: true });
+    assert.deepEqual(echoed, { params: { ok: true } });
+    let settled = false;
+    void hung.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(settled, false);
+  });
+});
+
+test('per-request timeout override can shorten a single request', async () => {
+  await withDaemon({ requestTimeoutMs: 5_000 }, async (daemon) => {
+    await assert.rejects(() => daemon.acp.request('hang', undefined, 150), /timed out/);
+    const echoed = await daemon.acp.request('echo', { after: 'override' });
+    assert.deepEqual(echoed, { params: { after: 'override' } });
   });
 });
 

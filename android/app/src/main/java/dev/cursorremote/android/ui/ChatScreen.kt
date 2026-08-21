@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.dp
 import dev.cursorremote.android.state.ChatMessage
 import dev.cursorremote.android.state.ChatRole
 import dev.cursorremote.android.state.CursorRemoteUiState
+import dev.cursorremote.android.state.PendingPermission
 
 @Composable
 fun ChatScreen(
@@ -33,6 +34,8 @@ fun ChatScreen(
     onBack: () -> Unit,
     onSend: (text: String) -> Unit,
     onStop: () -> Unit,
+    onApprove: () -> Unit,
+    onReject: () -> Unit,
 ) {
     var draft by rememberSaveable { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -56,6 +59,9 @@ fun ChatScreen(
             items(uiState.chatMessages, key = { it.id }) { message ->
                 ChatMessageRow(message)
             }
+        }
+        uiState.pendingPermission?.let { pending ->
+            ApprovalCard(pending = pending, onApprove = onApprove, onReject = onReject)
         }
         OutlinedTextField(
             value = draft,
@@ -108,3 +114,21 @@ private fun ChatMessageRow(message: ChatMessage) {
 
 private fun chatRoleLabel(role: ChatRole): String =
     if (role == ChatRole.User) "User" else "Assistant"
+
+@Composable
+private fun ApprovalCard(
+    pending: PendingPermission,
+    onApprove: () -> Unit,
+    onReject: () -> Unit,
+) {
+    val enabled = !pending.deciding
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text("Approval required", style = MaterialTheme.typography.titleMedium)
+        Text(pending.command)
+        Text("Risk: High")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = onReject, enabled = enabled) { Text("Reject") }
+            Button(onClick = onApprove, enabled = enabled) { Text("Approve") }
+        }
+    }
+}

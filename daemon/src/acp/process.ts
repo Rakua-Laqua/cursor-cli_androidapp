@@ -191,21 +191,22 @@ export class AcpProcess {
     };
   }
 
-  request(method: string, params?: unknown): Promise<unknown> {
+  request(method: string, params?: unknown, timeoutMs?: number): Promise<unknown> {
     if (this.state !== 'running') {
       return Promise.reject(new Error(`ACP process is ${this.state}`));
     }
 
     const id = this.nextId;
     this.nextId += 1;
+    const effectiveTimeoutMs = timeoutMs !== undefined ? timeoutMs : this.requestTimeoutMs;
 
     return new Promise<unknown>((resolve, reject) => {
       const timer =
-        this.requestTimeoutMs > 0
+        effectiveTimeoutMs > 0
           ? setTimeout(() => {
               this.pending.delete(id);
               reject(new Error(`ACP request timed out: ${method}`));
-            }, this.requestTimeoutMs)
+            }, effectiveTimeoutMs)
           : undefined;
 
       this.pending.set(id, { method, resolve, reject, timer });

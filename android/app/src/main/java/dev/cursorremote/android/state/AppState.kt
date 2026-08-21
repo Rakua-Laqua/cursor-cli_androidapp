@@ -34,6 +34,14 @@ data class ChatMessage(
     val isStreaming: Boolean = false,
 )
 
+data class PendingPermission(
+    val permissionId: String,
+    val kind: String,
+    val command: String,
+    val risk: String,
+    val deciding: Boolean = false,
+)
+
 data class CursorRemoteUiState(
     val selectedMachineId: String? = null,
     val selectedWorkspaceId: String? = null,
@@ -50,6 +58,7 @@ data class CursorRemoteUiState(
     val chatTerminal: String? = null,
     val isSending: Boolean = false,
     val isStopping: Boolean = false,
+    val pendingPermission: PendingPermission? = null,
 )
 
 class CursorRemoteViewModel(
@@ -158,6 +167,14 @@ class CursorRemoteViewModel(
                 finishStop(sessionId, epoch, errorMessage = error.message ?: "Request failed")
             }
         }
+    }
+
+    fun approvePermission() {
+        decidePermission(approve = true)
+    }
+
+    fun rejectPermission() {
+        decidePermission(approve = false)
     }
 
     suspend fun registerFromPairingJson(
@@ -277,6 +294,34 @@ class CursorRemoteViewModel(
             is ChatEvent.AgentCompleted -> applyTerminal(chat.sessionId, "completed", error = null)
             is ChatEvent.AgentFailed -> applyTerminal(chat.sessionId, "failed", error = chat.reason)
             is ChatEvent.AgentInterrupted -> applyTerminal(chat.sessionId, "interrupted", error = null)
+            is ChatEvent.PermissionRequested -> {
+                _uiState.update { state ->
+                    if (state.selectedSessionId != chat.sessionId) {
+                        state
+                    } else {
+                        state.copy(
+                            pendingPermission =
+                                PendingPermission(
+                                    permissionId = chat.permissionId,
+                                    kind = chat.kind,
+                                    command = chat.command,
+                                    risk = chat.risk,
+                                ),
+                        )
+                    }
+                }
+            }
+            is ChatEvent.PermissionResolved -> {
+                _uiState.update { state ->
+                    if (state.selectedSessionId != chat.sessionId ||
+                        state.pendingPermission?.permissionId != chat.permissionId
+                    ) {
+                        state
+                    } else {
+                        state.copy(pendingPermission = null)
+                    }
+                }
+            }
         }
     }
 
@@ -323,6 +368,59 @@ class CursorRemoteViewModel(
                     chatError = error ?: state.chatError,
                     isSending = false,
                     isStopping = false,
+                    pendingPermission = null,
+                )
+            }
+        }
+    }
+
+    private fun decidePermission(approve: Boolean) {
+        var claimedSessionId: String? = null
+        var claimedPermissionId: String? = null
+        _uiState.update { current ->
+            val sessionId = current.selectedSessionId
+            val pending = current.pendingPermission
+            if (sessionId == null || pending == null || pending.deciding) {
+                claimedSessionId = null
+                claimedPermissionId = null
+                current
+            } else {
+                claimedSessionId = sessionId
+                claimedPermissionId = pending.permissionId
+                current.copy(pendingPermission = pending.copy(deciding = true), chatError = null)
+            }
+        }
+        val sessionId = claimedSessionId ?: return
+        val permissionId = claimedPermissionId ?: return
+        scope.launch {
+            try {
+                if (approve) {
+                    remoteRepository.approvePermission(sessionId, permissionId)
+                } else {
+                    remoteRepository.rejectPermission(sessionId, permissionId)
+                }
+            } catch (error: CancellationException) {
+                clearPermissionDeciding(sessionId, permissionId, errorMessage = null)
+                throw error
+            } catch (error: Exception) {
+                clearPermissionDeciding(sessionId, permissionId, error.message ?: "Request failed")
+            }
+        }
+    }
+
+    private fun clearPermissionDeciding(
+        sessionId: String,
+        permissionId: String,
+        errorMessage: String?,
+    ) {
+        _uiState.update { state ->
+            val pending = state.pendingPermission
+            if (state.selectedSessionId != sessionId || pending?.permissionId != permissionId) {
+                state
+            } else {
+                state.copy(
+                    pendingPermission = pending.copy(deciding = false),
+                    chatError = errorMessage ?: state.chatError,
                 )
             }
         }
@@ -417,4 +515,5 @@ private fun CursorRemoteUiState.withClearedChat(): CursorRemoteUiState =
         chatTerminal = null,
         isSending = false,
         isStopping = false,
+        pendingPermission = null,
     )

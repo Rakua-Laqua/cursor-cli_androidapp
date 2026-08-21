@@ -79,6 +79,7 @@ class FoundationTest {
             assertNull(state.chatTerminal)
             assertFalse(state.isSending)
             assertFalse(state.isStopping)
+            assertNull(state.pendingPermission)
         }
     }
 
@@ -292,6 +293,117 @@ class FoundationTest {
                     listOf("hello", "xyz", "world", "hello", "next", "fail", "ok"),
                     viewModel.uiState.value.chatMessages.map { it.text },
                 )
+            }
+        }
+    }
+
+    @Test
+    fun permissionRequestedResolvedApproveRejectAndSessionClear() {
+        withViewModel { viewModel, dao, transport ->
+            runBlocking {
+                dao.upsert(pairedMachine())
+                assertTrue(viewModel.connectExistingMachine("pc-1"))
+                assertTrue(viewModel.openWorkspace("ws-1"))
+                assertTrue(viewModel.resumeSession("sess-1"))
+                hangSessionSend(transport, hangCancel = true)
+                viewModel.sendPrompt("hello")
+                assertTrue(viewModel.uiState.value.isSending)
+                transport.emit(
+                    eventJson(
+                        "permission.requested",
+                        "other",
+                        """{"permissionId":"perm-other","kind":"execute","command":"nope","risk":"high"}""",
+                        eventId = "evt-other",
+                    ),
+                )
+                assertNull(viewModel.uiState.value.pendingPermission)
+                transport.emit(
+                    eventJson(
+                        "permission.requested",
+                        "sess-1",
+                        """{"permissionId":"perm-1","kind":"execute","command":"Get-ChildItem -Force","risk":"high"}""",
+                    ),
+                )
+                assertEquals("perm-1", viewModel.uiState.value.pendingPermission?.permissionId)
+                assertEquals("Get-ChildItem -Force", viewModel.uiState.value.pendingPermission?.command)
+                assertTrue(viewModel.uiState.value.isSending)
+                transport.emit(
+                    eventJson(
+                        "permission.resolved",
+                        "sess-1",
+                        """{"permissionId":"stale","decision":"approved"}""",
+                        eventId = "evt-stale",
+                    ),
+                )
+                assertEquals("perm-1", viewModel.uiState.value.pendingPermission?.permissionId)
+                viewModel.approvePermission()
+                viewModel.approvePermission()
+                viewModel.rejectPermission()
+                assertEquals(1, transport.sent.count { commandType(it) == "permission.approve" })
+                assertEquals(0, transport.sent.count { commandType(it) == "permission.reject" })
+                assertTrue(viewModel.uiState.value.pendingPermission?.deciding == true)
+                val approve = lastCommand(transport, "permission.approve")
+                assertTrue(approve.contains("\"permissionId\":\"perm-1\""))
+                assertEquals(false, approve.contains("optionId"))
+                transport.emit(resultJson(requestIdOf(approve), ok = true, value = "null"))
+                transport.emit(
+                    eventJson(
+                        "permission.resolved",
+                        "sess-1",
+                        """{"permissionId":"perm-1","decision":"approved"}""",
+                        eventId = "evt-resolved",
+                    ),
+                )
+                assertNull(viewModel.uiState.value.pendingPermission)
+                assertTrue(viewModel.uiState.value.isSending)
+                val approveCountAfterResolved = transport.sent.count { commandType(it) == "permission.approve" }
+                viewModel.approvePermission()
+                viewModel.rejectPermission()
+                assertEquals(approveCountAfterResolved, transport.sent.count { commandType(it) == "permission.approve" })
+                assertEquals(0, transport.sent.count { commandType(it) == "permission.reject" })
+                transport.emit(
+                    eventJson(
+                        "permission.requested",
+                        "sess-1",
+                        """{"permissionId":"perm-2","kind":"execute","command":"ls","risk":"high"}""",
+                        eventId = "evt-req2",
+                    ),
+                )
+                assertEquals("perm-2", viewModel.uiState.value.pendingPermission?.permissionId)
+                assertEquals(false, viewModel.uiState.value.pendingPermission?.deciding)
+                viewModel.rejectPermission()
+                viewModel.rejectPermission()
+                assertEquals(1, transport.sent.count { commandType(it) == "permission.reject" })
+                assertTrue(lastCommand(transport, "permission.reject").contains("\"permissionId\":\"perm-2\""))
+                transport.emit(
+                    eventJson(
+                        "permission.resolved",
+                        "sess-1",
+                        """{"permissionId":"perm-2","decision":"rejected"}""",
+                        eventId = "evt-rej2",
+                    ),
+                )
+                assertNull(viewModel.uiState.value.pendingPermission)
+                viewModel.selectSession("sess-2")
+                assertNull(viewModel.uiState.value.pendingPermission)
+                viewModel.selectSession("sess-1")
+                hangSessionSend(transport)
+                viewModel.sendPrompt("again")
+                transport.emit(
+                    eventJson(
+                        "permission.requested",
+                        "sess-1",
+                        """{"permissionId":"perm-3","kind":"execute","command":"rm","risk":"high"}""",
+                        eventId = "evt-req3",
+                    ),
+                )
+                transport.emit(eventJson("agent.completed", "sess-1", """{"reason":null}""", eventId = "evt-term"))
+                assertNull(viewModel.uiState.value.pendingPermission)
+                assertEquals("completed", viewModel.uiState.value.chatTerminal)
+                val sentAfterTerminal = transport.sent.size
+                viewModel.approvePermission()
+                viewModel.rejectPermission()
+                assertEquals(sentAfterTerminal, transport.sent.size)
             }
         }
     }

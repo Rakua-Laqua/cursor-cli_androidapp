@@ -82,6 +82,8 @@ fun CursorRemoteApp(viewModel: CursorRemoteViewModel) {
                         onBack = { navController.popBackStack() },
                         onSend = viewModel::sendPrompt,
                         onStop = viewModel::stopSession,
+                        onApprove = viewModel::approvePermission,
+                        onReject = viewModel::rejectPermission,
                     )
                 }
             }

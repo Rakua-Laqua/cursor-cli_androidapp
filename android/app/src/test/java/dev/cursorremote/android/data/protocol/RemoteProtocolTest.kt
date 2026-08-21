@@ -179,6 +179,37 @@ class RemoteProtocolTest {
     }
 
     @Test
+    fun permissionPayloadsParseTypedAndRejectMalformed() {
+        assertEquals("""{"permissionId":"perm-1"}""", RemoteProtocol.permissionApprovePayload("perm-1").toString())
+        assertEquals("""{"permissionId":"perm-1"}""", RemoteProtocol.permissionRejectPayload("perm-1").toString())
+        assertEquals(false, RemoteProtocol.permissionApprovePayload("perm-1").toString().contains("optionId"))
+        assertEquals(false, RemoteProtocol.permissionRejectPayload("perm-1").toString().contains("allow"))
+        val requested =
+            RemoteProtocol.parseChatEvent(
+                chatRemoteEvent(
+                    "permission.requested",
+                    """{"permissionId":"perm-1","kind":"execute","command":"Get-ChildItem -Force","risk":"high"}""",
+                ),
+            ) as ChatEvent.PermissionRequested
+        assertEquals("perm-1", requested.permissionId)
+        assertEquals("execute", requested.kind)
+        assertEquals("Get-ChildItem -Force", requested.command)
+        assertEquals("high", requested.risk)
+        val resolved =
+            RemoteProtocol.parseChatEvent(
+                chatRemoteEvent("permission.resolved", """{"permissionId":"perm-1","decision":"rejected"}"""),
+            ) as ChatEvent.PermissionResolved
+        assertEquals("perm-1", resolved.permissionId)
+        assertEquals("rejected", resolved.decision)
+        assertChatParseError("permissionId") {
+            chatRemoteEvent("permission.requested", """{"kind":"execute","command":"ls","risk":"high"}""")
+        }
+        assertChatParseError("decision") {
+            chatRemoteEvent("permission.resolved", """{"permissionId":"perm-1","decision":"always"}""")
+        }
+    }
+
+    @Test
     fun sessionPayloadRequiresKnownStatusAndNonEmptyTitle() {
         val valid =
             """{"remoteSessionId":"s1","cursorSessionId":null,"workspaceId":"ws-1","title":"Session","status":"idle","createdAt":"c","updatedAt":"u"}"""
