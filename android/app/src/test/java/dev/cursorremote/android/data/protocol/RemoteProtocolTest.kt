@@ -263,12 +263,48 @@ class RemoteProtocolTest {
         }
     }
 
+    @Test
+    fun fileReadPayloadAndContentParseTypedAndRejectMalformed() {
+        assertEquals("""{"path":"src/foo.ts"}""", RemoteProtocol.fileReadPayload("src/foo.ts").toString())
+        assertEquals(false, RemoteProtocol.fileReadPayload("src/foo.ts").toString().contains("workspaceId"))
+        assertEquals(false, RemoteProtocol.fileReadPayload("src/foo.ts").toString().contains("startLine"))
+        val valid = """{"path":"src/foo.ts","content":"export const n = 1;\n","truncated":false,"extra":true}"""
+        val parsed = RemoteProtocol.parseFileContent(kotlinx.serialization.json.Json.parseToJsonElement(valid))
+        assertEquals("src/foo.ts", parsed.path)
+        assertEquals("export const n = 1;\n", parsed.content)
+        assertEquals(false, parsed.truncated)
+        val empty = RemoteProtocol.parseFileContent(kotlinx.serialization.json.Json.parseToJsonElement("""{"path":"a.ts","content":"","truncated":true}"""))
+        assertEquals("", empty.content)
+        assertEquals(true, empty.truncated)
+        assertFileContentParseError("path") {
+            """{"path":"","content":"x","truncated":false}"""
+        }
+        assertFileContentParseError("content") {
+            """{"path":"a.ts","truncated":false}"""
+        }
+        assertFileContentParseError("truncated") {
+            """{"path":"a.ts","content":"x","truncated":"yes"}"""
+        }
+    }
+
     private fun assertDiffParseError(
         messagePattern: String,
         json: () -> String,
     ) {
         try {
             RemoteProtocol.parseDiffSnapshot(kotlinx.serialization.json.Json.parseToJsonElement(json()))
+            fail("expected ProtocolParseError")
+        } catch (error: ProtocolParseError) {
+            assertTrue("message=${error.message}", Regex(messagePattern).containsMatchIn(error.message ?: ""))
+        }
+    }
+
+    private fun assertFileContentParseError(
+        messagePattern: String,
+        json: () -> String,
+    ) {
+        try {
+            RemoteProtocol.parseFileContent(kotlinx.serialization.json.Json.parseToJsonElement(json()))
             fail("expected ProtocolParseError")
         } catch (error: ProtocolParseError) {
             assertTrue("message=${error.message}", Regex(messagePattern).containsMatchIn(error.message ?: ""))

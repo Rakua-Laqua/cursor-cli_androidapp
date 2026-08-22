@@ -26,7 +26,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
 import dev.cursorremote.android.data.protocol.DiffFileInfo
 import dev.cursorremote.android.state.ChatMessage
@@ -44,6 +50,7 @@ fun ChatScreen(
     onReject: () -> Unit,
     onRefreshDiff: () -> Unit,
     onToggleDiffFile: (path: String) -> Unit,
+    onOpenFile: (path: String, startLine: Int?, endLine: Int?) -> Unit,
 ) {
     var draft by rememberSaveable { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -68,7 +75,7 @@ fun ChatScreen(
             verticalArrangement = Arrangement.spacedBy(8.dp),
         ) {
             items(uiState.chatMessages, key = { it.id }) { message ->
-                ChatMessageRow(message)
+                ChatMessageRow(message, onOpenFile)
             }
         }
         uiState.pendingPermission?.let { pending ->
@@ -116,11 +123,61 @@ private fun ChatStatusLabels(uiState: CursorRemoteUiState) {
 }
 
 @Composable
-private fun ChatMessageRow(message: ChatMessage) {
+private fun ChatMessageRow(
+    message: ChatMessage,
+    onOpenFile: (path: String, startLine: Int?, endLine: Int?) -> Unit,
+) {
     Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
         Text(chatRoleLabel(message.role), style = MaterialTheme.typography.titleSmall)
-        Text(message.text)
+        if (message.role == ChatRole.User) {
+            Text(message.text)
+        } else {
+            AssistantMessageText(message.text, onOpenFile)
+        }
     }
+}
+
+@Composable
+private fun AssistantMessageText(
+    text: String,
+    onOpenFile: (path: String, startLine: Int?, endLine: Int?) -> Unit,
+) {
+    val refs = parseFileReferences(text)
+    if (refs.isEmpty()) {
+        Text(text)
+        return
+    }
+    val linkStyles =
+        TextLinkStyles(
+            style =
+                SpanStyle(
+                    color = MaterialTheme.colorScheme.primary,
+                    textDecoration = TextDecoration.Underline,
+                ),
+        )
+    val annotated =
+        buildAnnotatedString {
+            var last = 0
+            for (ref in refs) {
+                if (ref.startIndex > last) {
+                    append(text.substring(last, ref.startIndex))
+                }
+                withLink(
+                    LinkAnnotation.Clickable(
+                        tag = "file:${ref.startIndex}",
+                        styles = linkStyles,
+                        linkInteractionListener = { onOpenFile(ref.path, ref.startLine, ref.endLine) },
+                    ),
+                ) {
+                    append(text.substring(ref.startIndex, ref.endIndex))
+                }
+                last = ref.endIndex
+            }
+            if (last < text.length) {
+                append(text.substring(last))
+            }
+        }
+    Text(text = annotated)
 }
 
 private fun chatRoleLabel(role: ChatRole): String =

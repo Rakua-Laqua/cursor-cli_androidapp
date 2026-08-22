@@ -255,6 +255,16 @@ export interface DiffReadCommandPayload extends JsonObject {
   readonly workspaceId: string;
 }
 
+export interface FileReadCommandPayload extends JsonObject {
+  readonly path: string;
+}
+
+export interface FileContentPayload extends JsonObject {
+  readonly path: string;
+  readonly content: string;
+  readonly truncated: boolean;
+}
+
 const eventTypeSet: ReadonlySet<string> = new Set(EVENT_TYPES);
 const commandTypeSet: ReadonlySet<string> = new Set(COMMAND_TYPES);
 

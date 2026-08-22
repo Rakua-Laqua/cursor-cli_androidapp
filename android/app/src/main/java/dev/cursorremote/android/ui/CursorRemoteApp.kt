@@ -77,16 +77,26 @@ fun CursorRemoteApp(viewModel: CursorRemoteViewModel) {
                     )
                 }
                 composable(AppDestination.Chat.route) {
-                    ChatScreen(
-                        uiState = uiState,
-                        onBack = { navController.popBackStack() },
-                        onSend = viewModel::sendPrompt,
-                        onStop = viewModel::stopSession,
-                        onApprove = viewModel::approvePermission,
-                        onReject = viewModel::rejectPermission,
-                        onRefreshDiff = viewModel::refreshDiff,
-                        onToggleDiffFile = viewModel::toggleDiffFile,
-                    )
+                    val viewer = uiState.fileViewer
+                    if (viewer != null) {
+                        FileViewerScreen(
+                            state = viewer,
+                            onReload = viewModel::reloadFile,
+                            onClose = viewModel::closeFile,
+                        )
+                    } else {
+                        ChatScreen(
+                            uiState = uiState,
+                            onBack = { navController.popBackStack() },
+                            onSend = viewModel::sendPrompt,
+                            onStop = viewModel::stopSession,
+                            onApprove = viewModel::approvePermission,
+                            onReject = viewModel::rejectPermission,
+                            onRefreshDiff = viewModel::refreshDiff,
+                            onToggleDiffFile = viewModel::toggleDiffFile,
+                            onOpenFile = { path, startLine, endLine -> viewModel.openFile(path, startLine, endLine) },
+                        )
+                    }
                 }
             }
         }

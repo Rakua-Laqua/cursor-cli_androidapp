@@ -74,6 +74,12 @@ data class DiffSnapshot(
     val totalDeletions: Int,
 )
 
+data class FileContent(
+    val path: String,
+    val content: String,
+    val truncated: Boolean,
+)
+
 data class RemoteCommandResult(val requestId: String, val ok: Boolean, val value: JsonElement?, val error: String?)
 
 data class RemoteEvent(
@@ -423,6 +429,20 @@ object RemoteProtocol {
     fun diffReadPayload(workspaceId: String): JsonObject {
         requireNonEmpty(workspaceId, "workspaceId")
         return buildJsonObject { put("workspaceId", workspaceId) }
+    }
+
+    fun fileReadPayload(path: String): JsonObject {
+        requireNonEmpty(path, "path")
+        return buildJsonObject { put("path", path) }
+    }
+
+    fun parseFileContent(value: JsonElement?): FileContent {
+        val root = parseObject(value ?: throw ProtocolParseError("file content must be a JSON object."), "file content")
+        return FileContent(
+            path = requireNonEmptyString(root, "path"),
+            content = requireStringField(root, "content"),
+            truncated = requireBoolean(root, "truncated"),
+        )
     }
 
     fun parseChatEvent(event: RemoteEvent): ChatEvent? {

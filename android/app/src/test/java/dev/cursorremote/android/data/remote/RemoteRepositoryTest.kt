@@ -186,6 +186,24 @@ class RemoteRepositoryTest {
         }
 
     @Test
+    fun fileReadSendsSessionIdAndPathOnly() =
+        withRepository { repo, transport ->
+            repo.authenticate("ws://127.0.0.1:8787", "pc-1", "device-1")
+            val content = repo.readFile("sess-1", "src/foo.ts")
+            assertEquals("src/foo.ts", content.path)
+            assertEquals("file-body", content.content)
+            assertEquals(false, content.truncated)
+            val frame = lastCommand(transport, "file.read")
+            assertTrue(frame.contains("\"type\":\"file.read\""))
+            assertTrue(frame.contains("\"sessionId\":\"sess-1\""))
+            assertTrue(frame.contains("\"path\":\"src/foo.ts\""))
+            assertEquals("""{"path":"src/foo.ts"}""", RemoteProtocol.fileReadPayload("src/foo.ts").toString())
+            assertEquals(false, frame.contains("workspaceId"))
+            assertEquals(false, frame.contains("startLine"))
+            assertEquals(false, frame.contains("endLine"))
+        }
+
+    @Test
     fun disconnectFailsInFlightSessionSend() =
         withRepository { repo, transport ->
             repo.authenticate("ws://127.0.0.1:8787", "pc-1", "device-1")

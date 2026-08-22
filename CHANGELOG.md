@@ -1,5 +1,23 @@
 # CHANGELOG
 
+## [1.10.0] - 2026-08-22
+
+### 追加
+
+- Assistant 応答内の workspace 相対ファイル参照（`src/foo.ts`、`:120`、`:120-160`）をリンク化し、Chat 内の読み取り専用 Viewer で開く。行番号、等幅、折り返しなし、指定開始行への移動、範囲表示、Copy、Reload、Close。User メッセージはリンク化しない。編集機能はない。Android は候補抽出のみ。file content は保存しない。Push 通知は含まない。
+
+### 変更
+
+- パッケージ版 1.10.0、Android `versionCode` 23 / `versionName` 1.10.0。Relay の generic routing は変えない。
+
+### セキュリティ
+
+- `file.read` は sessionId と path だけ。Daemon が session の登録済み Workspace を毎回再解決し、path 構文、canonical containment、sensitive 名、regular file、binary/NUL、strict UTF-8 を検証する。最大 262144 bytes。超過は UTF-8 境界で truncate metadata。error に raw absolute path を含めない。workspace 外と `.env` 等は拒否。
+
+### テスト
+
+- `npm test` は protocol 15 / daemon 112 / relay 8 全 pass。`npm run lint` pass。対象 TS/MJS の Prettier check pass。Gradle `:app:testDebugUnitTest :app:assembleDebug :app:lintDebug` pass（53 tasks）。実機 SM-S928Q Android 16、localhost Relay + adb reverse で 3 種の有効参照が下線リンク、`daemon/src/daemon.ts:120-150` で 120 行目から Viewer、Copy / Reload 後も内容維持。`daemon/.env` は `File is not readable`。`../outside.txt` は下線なし。詳細は `docs/implementation_status.md`。
+
 ## [1.9.0] - 2026-08-22
 
 ### 追加

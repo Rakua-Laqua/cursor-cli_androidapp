@@ -6,6 +6,7 @@ import dev.cursorremote.android.data.local.MachineDao
 import dev.cursorremote.android.data.local.MachineEntity
 import dev.cursorremote.android.data.protocol.ChatEvent
 import dev.cursorremote.android.data.protocol.DiffSnapshot
+import dev.cursorremote.android.data.protocol.FileContent
 import dev.cursorremote.android.data.protocol.ProtocolParseError
 import dev.cursorremote.android.data.protocol.RemoteEvent
 import dev.cursorremote.android.data.protocol.RemoteProtocol
@@ -43,6 +44,16 @@ data class PendingPermission(
     val deciding: Boolean = false,
 )
 
+data class FileViewerState(
+    val path: String,
+    val startLine: Int? = null,
+    val endLine: Int? = null,
+    val content: String? = null,
+    val truncated: Boolean = false,
+    val loading: Boolean = false,
+    val error: String? = null,
+)
+
 data class CursorRemoteUiState(
     val selectedMachineId: String? = null,
     val selectedWorkspaceId: String? = null,
@@ -64,6 +75,7 @@ data class CursorRemoteUiState(
     val diffLoading: Boolean = false,
     val diffError: String? = null,
     val expandedDiffPaths: Set<String> = emptySet(),
+    val fileViewer: FileViewerState? = null,
 )
 
 class CursorRemoteViewModel(
@@ -78,6 +90,7 @@ class CursorRemoteViewModel(
     private val messageSeq = AtomicLong(0)
     private val chatEpoch = AtomicLong(0)
     private val diffEpoch = AtomicLong(0)
+    private val fileEpoch = AtomicLong(0)
     val uiState: StateFlow<CursorRemoteUiState> = _uiState.asStateFlow()
     val connectionState: StateFlow<ConnectionState> = remoteRepository.socketConnectionState
 
@@ -103,8 +116,9 @@ class CursorRemoteViewModel(
     fun selectMachine(machineId: String?) {
         invalidateChat()
         invalidateDiff()
+        invalidateFileViewer()
         _uiState.update {
-            it.withClearedChat().withClearedDiff().copy(
+            it.withClearedChat().withClearedDiff().withClearedFileViewer().copy(
                 selectedMachineId = machineId,
                 selectedWorkspaceId = null,
                 selectedSessionId = null,
@@ -117,14 +131,20 @@ class CursorRemoteViewModel(
     fun selectWorkspace(workspaceId: String?) {
         invalidateChat()
         invalidateDiff()
+        invalidateFileViewer()
         _uiState.update {
-            it.withClearedChat().withClearedDiff().copy(selectedWorkspaceId = workspaceId, selectedSessionId = null, sessions = emptyList())
+            it.withClearedChat().withClearedDiff().withClearedFileViewer().copy(
+                selectedWorkspaceId = workspaceId,
+                selectedSessionId = null,
+                sessions = emptyList(),
+            )
         }
     }
 
     fun selectSession(sessionId: String?) {
         invalidateChat()
-        _uiState.update { it.withClearedChat().copy(selectedSessionId = sessionId) }
+        invalidateFileViewer()
+        _uiState.update { it.withClearedChat().withClearedFileViewer().copy(selectedSessionId = sessionId) }
     }
 
     fun sendPrompt(text: String) {
@@ -211,6 +231,40 @@ class CursorRemoteViewModel(
             }
             state.copy(expandedDiffPaths = next)
         }
+    }
+
+    fun openFile(path: String, startLine: Int? = null, endLine: Int? = null) {
+        val sessionId = _uiState.value.selectedSessionId ?: return
+        val epoch = fileEpoch.incrementAndGet()
+        _uiState.update {
+            it.copy(
+                fileViewer =
+                    FileViewerState(
+                        path = path,
+                        startLine = startLine,
+                        endLine = endLine,
+                        loading = true,
+                        error = null,
+                        content = null,
+                        truncated = false,
+                    ),
+            )
+        }
+        requestFile(sessionId, path, startLine, endLine, epoch)
+    }
+
+    fun reloadFile() {
+        val viewer = _uiState.value.fileViewer ?: return
+        if (viewer.loading) return
+        val sessionId = _uiState.value.selectedSessionId ?: return
+        val epoch = fileEpoch.incrementAndGet()
+        _uiState.update { it.copy(fileViewer = viewer.copy(loading = true, error = null)) }
+        requestFile(sessionId, viewer.path, viewer.startLine, viewer.endLine, epoch)
+    }
+
+    fun closeFile() {
+        fileEpoch.incrementAndGet()
+        _uiState.update { it.copy(fileViewer = null) }
     }
 
     suspend fun registerFromPairingJson(
@@ -562,6 +616,71 @@ class CursorRemoteViewModel(
         diffEpoch.incrementAndGet()
     }
 
+    private fun invalidateFileViewer() {
+        fileEpoch.incrementAndGet()
+    }
+
+    private fun requestFile(
+        sessionId: String,
+        path: String,
+        startLine: Int?,
+        endLine: Int?,
+        epoch: Long,
+    ) {
+        scope.launch {
+            try {
+                applyFileContent(remoteRepository.readFile(sessionId, path), sessionId, epoch, startLine, endLine)
+            } catch (error: CancellationException) {
+                finishFile(sessionId, epoch, errorMessage = null)
+                throw error
+            } catch (error: Exception) {
+                finishFile(sessionId, epoch, error.message ?: "Failed to read file")
+            }
+        }
+    }
+
+    private fun applyFileContent(
+        content: FileContent,
+        sessionId: String,
+        epoch: Long,
+        startLine: Int?,
+        endLine: Int?,
+    ) {
+        _uiState.update { state ->
+            if (fileEpoch.get() != epoch || state.selectedSessionId != sessionId) {
+                state
+            } else {
+                state.copy(
+                    fileViewer =
+                        FileViewerState(
+                            path = content.path,
+                            startLine = startLine,
+                            endLine = endLine,
+                            content = content.content,
+                            truncated = content.truncated,
+                            loading = false,
+                            error = null,
+                        ),
+                )
+            }
+        }
+    }
+
+    private fun finishFile(
+        sessionId: String,
+        epoch: Long,
+        errorMessage: String?,
+    ) {
+        _uiState.update { state ->
+            val viewer = state.fileViewer
+            if (fileEpoch.get() != epoch || state.selectedSessionId != sessionId || viewer == null) {
+                state
+            } else {
+                state.copy(fileViewer = viewer.copy(loading = false, error = errorMessage ?: viewer.error))
+            }
+        }
+    }
+
     private fun nextMessageId(): String = "msg-${messageSeq.incrementAndGet()}"
 
     private fun showWorkspaces(workspaces: List<WorkspaceInfo>) {
@@ -607,3 +726,5 @@ private fun CursorRemoteUiState.withClearedDiff(): CursorRemoteUiState =
         diffError = null,
         expandedDiffPaths = emptySet(),
     )
+
+private fun CursorRemoteUiState.withClearedFileViewer(): CursorRemoteUiState = copy(fileViewer = null)

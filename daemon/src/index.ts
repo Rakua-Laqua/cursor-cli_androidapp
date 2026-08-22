@@ -15,6 +15,13 @@ export { AcpSessionAdapter, type CreateSessionInput } from './session/session-ad
 export { mapAcpSessionUpdate, type MappedSessionEvent } from './session/map-session-update.js';
 export { DiffPipeline } from './diff/diff-pipeline.js';
 export {
+  FileReadError,
+  FileReader,
+  MAX_FILE_READ_BYTES,
+  MAX_FILE_READ_PATH_CHARS,
+  readWorkspaceFile,
+} from './file/file-reader.js';
+export {
   DIFF_GIT_TIMEOUT_MS,
   GitDiffError,
   GitDiffSource,

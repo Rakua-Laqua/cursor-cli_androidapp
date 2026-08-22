@@ -2,6 +2,7 @@ import { join } from 'node:path';
 
 import type {
   DiffSnapshotPayload,
+  FileContentPayload,
   KnownRemoteEvent,
   RemoteCommand,
   SessionPayload,
@@ -11,6 +12,7 @@ import type {
 import { AcpProcess, type AcpProcessLogger, type AcpProcessOptions } from './acp/process.js';
 import { resolveAcpCommand } from './acp/resolve-command.js';
 import { DiffPipeline } from './diff/diff-pipeline.js';
+import { FileReader } from './file/file-reader.js';
 import { PairingManager } from './pairing/pairing-manager.js';
 import { AcpSessionAdapter } from './session/session-adapter.js';
 import { METADATA_FILE_NAME, MetadataStore } from './store/metadata-store.js';
@@ -40,6 +42,7 @@ export class Daemon {
     private readonly workspaceManager: WorkspaceManager,
     private readonly pairingManager: PairingManager,
     private readonly diffPipeline: DiffPipeline,
+    private readonly fileReader: FileReader,
   ) {}
 
   static async start(options: DaemonStartOptions = {}): Promise<Daemon> {
@@ -91,6 +94,7 @@ export class Daemon {
         workspaceManager,
         new PairingManager(store),
         new DiffPipeline(workspaceManager),
+        new FileReader(sessionAdapter, workspaceManager),
       );
     } catch (error) {
       await acpProcess.shutdown();
@@ -133,6 +137,7 @@ export class Daemon {
     | WorkspaceUpdatedPayload
     | WorkspaceUpdatedPayload[]
     | DiffSnapshotPayload
+    | FileContentPayload
     | undefined
   > {
     if (command.type === 'workspace.list' || command.type === 'workspace.register') {
@@ -140,6 +145,9 @@ export class Daemon {
     }
     if (command.type === 'diff.read') {
       return this.diffPipeline.handleCommand(command);
+    }
+    if (command.type === 'file.read') {
+      return this.fileReader.handleCommand(command);
     }
     return this.sessionAdapter.handleCommand(command);
   }

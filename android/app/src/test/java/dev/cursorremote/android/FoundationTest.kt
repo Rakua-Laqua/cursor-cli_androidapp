@@ -84,6 +84,7 @@ class FoundationTest {
             assertFalse(state.diffLoading)
             assertNull(state.diffError)
             assertTrue(state.expandedDiffPaths.isEmpty())
+            assertNull(state.fileViewer)
         }
     }
 
@@ -455,6 +456,85 @@ class FoundationTest {
         }
     }
 
+    @Test
+    fun fileViewerOpenReloadCloseEpochAndStaleResults() {
+        withViewModel { viewModel, dao, transport ->
+            runBlocking {
+                dao.upsert(pairedMachine())
+                assertTrue(viewModel.connectExistingMachine("pc-1"))
+                assertTrue(viewModel.openWorkspace("ws-1"))
+                assertTrue(viewModel.resumeSession("sess-1"))
+                viewModel.openFile("src/foo.ts", 120, 160)
+                val opened = viewModel.uiState.value.fileViewer
+                assertEquals("src/foo.ts", opened?.path)
+                assertEquals(120, opened?.startLine)
+                assertEquals(160, opened?.endLine)
+                assertEquals("file-body", opened?.content)
+                assertEquals(false, opened?.loading)
+                assertNull(opened?.error)
+                val successFrame = lastCommand(transport, "file.read")
+                assertTrue(successFrame.contains("\"sessionId\":\"sess-1\""))
+                assertTrue(successFrame.contains("\"path\":\"src/foo.ts\""))
+                assertEquals(false, successFrame.contains("workspaceId"))
+                assertEquals(false, successFrame.contains("startLine"))
+                viewModel.reloadFile()
+                assertEquals("file-body", viewModel.uiState.value.fileViewer?.content)
+                assertEquals(2, transport.sent.count { commandType(it) == "file.read" })
+                viewModel.closeFile()
+                assertNull(viewModel.uiState.value.fileViewer)
+
+                hangFileRead(transport)
+                viewModel.openFile("src/a.ts", 1, null)
+                val first = lastCommand(transport, "file.read")
+                assertEquals(true, viewModel.uiState.value.fileViewer?.loading)
+                viewModel.openFile("src/b.ts")
+                val second = lastCommand(transport, "file.read")
+                assertTrue(first != second)
+                transport.emit(resultJson(requestIdOf(first), ok = true, value = """{"path":"src/a.ts","content":"A","truncated":false}"""))
+                assertEquals("src/b.ts", viewModel.uiState.value.fileViewer?.path)
+                assertEquals(true, viewModel.uiState.value.fileViewer?.loading)
+                assertNull(viewModel.uiState.value.fileViewer?.content)
+                transport.emit(resultJson(requestIdOf(second), ok = true, value = """{"path":"src/b.ts","content":"B","truncated":true}"""))
+                assertEquals("src/b.ts", viewModel.uiState.value.fileViewer?.path)
+                assertEquals("B", viewModel.uiState.value.fileViewer?.content)
+                assertEquals(true, viewModel.uiState.value.fileViewer?.truncated)
+                assertEquals(false, viewModel.uiState.value.fileViewer?.loading)
+
+                hangFileRead(transport)
+                viewModel.openFile("src/c.ts")
+                val hung = lastCommand(transport, "file.read")
+                viewModel.selectSession("sess-2")
+                assertNull(viewModel.uiState.value.fileViewer)
+                transport.emit(resultJson(requestIdOf(hung), ok = true, value = """{"path":"src/c.ts","content":"C","truncated":false}"""))
+                assertNull(viewModel.uiState.value.fileViewer)
+                viewModel.selectSession("sess-1")
+                hangFileRead(transport)
+                viewModel.openFile("src/d.ts")
+                val workspaceHung = lastCommand(transport, "file.read")
+                viewModel.selectWorkspace("ws-2")
+                assertNull(viewModel.uiState.value.fileViewer)
+                transport.emit(resultJson(requestIdOf(workspaceHung), ok = true, value = """{"path":"src/d.ts","content":"D","truncated":false}"""))
+                assertNull(viewModel.uiState.value.fileViewer)
+
+                viewModel.selectWorkspace("ws-1")
+                viewModel.selectSession("sess-1")
+                transport.onSend = { text ->
+                    if (commandType(text) == "file.read") {
+                        transport.emit(resultJson(requestIdOf(text), ok = false, value = "null", error = "File is not readable"))
+                    } else {
+                        transport.emit(successBody(requestIdOf(text), text))
+                    }
+                }
+                viewModel.openFile(".env")
+                val failed = viewModel.uiState.value.fileViewer
+                assertEquals(".env", failed?.path)
+                assertEquals("File is not readable", failed?.error)
+                assertNull(failed?.content)
+                assertEquals(false, failed?.loading)
+            }
+        }
+    }
+
     private fun withViewModel(
         autoRespond: Boolean = true,
         block: (CursorRemoteViewModel, FakeMachineDao, FakeTransport) -> Unit,
@@ -640,6 +720,12 @@ internal fun successBody(
                         Json.parseToJsonElement(text).jsonObject.getValue("command").jsonObject
                             .getValue("payload").jsonObject.getValue("workspaceId").jsonPrimitive.content,
                     )
+                    "file.read" -> {
+                        val path =
+                            Json.parseToJsonElement(text).jsonObject.getValue("command").jsonObject
+                                .getValue("payload").jsonObject.getValue("path").jsonPrimitive.content
+                        """{"path":"$path","content":"file-body","truncated":false}"""
+                    }
                     else -> "null"
                 }
             else -> "null"
@@ -671,6 +757,14 @@ internal fun lastCommand(
 internal fun hangDiffRead(transport: FakeTransport) {
     transport.onSend = { text ->
         if (commandType(text) != "diff.read") {
+            transport.emit(successBody(requestIdOf(text), text))
+        }
+    }
+}
+
+internal fun hangFileRead(transport: FakeTransport) {
+    transport.onSend = { text ->
+        if (commandType(text) != "file.read") {
             transport.emit(successBody(requestIdOf(text), text))
         }
     }

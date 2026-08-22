@@ -152,6 +152,10 @@ export class AcpSessionAdapter {
       .map((session) => toPayload(session));
   }
 
+  workspaceIdForSession(remoteSessionId: string): string {
+    return this.requireSession(remoteSessionId).workspaceId;
+  }
+
   async send(remoteSessionId: string, text: string): Promise<void> {
     const session = this.requireSession(remoteSessionId);
     await this.runPrompt(session, text);

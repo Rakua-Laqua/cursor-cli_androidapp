@@ -235,6 +235,31 @@ test('websocket mock ACP e2e: commands, streaming, cancel, restart, continuation
     assert.equal(listed.length, 1);
     assert.equal(listed[0].remoteSessionId, remoteSessionId);
 
+    fs.mkdirSync(path.join(workspacePath, 'src'));
+    fs.writeFileSync(path.join(workspacePath, 'src', 'foo.ts'), 'export const n = 1;\n');
+    const fileStart = frames.length;
+    const fileContent = await rpc(
+      client,
+      frames,
+      'file.read',
+      {
+        path: 'src/foo.ts',
+        workspaceId,
+        startLine: 1,
+        gitArgs: ['show'],
+      },
+      remoteSessionId,
+    );
+    assert.equal(fileContent.path, 'src/foo.ts');
+    assert.equal(fileContent.content, 'export const n = 1;\n');
+    assert.equal(fileContent.truncated, false);
+    assert.equal(
+      eventsFrom(frames, fileStart).some(
+        (event) => event.type === 'file.reference' || event.type === 'file.content',
+      ),
+      false,
+    );
+
     const diffStart = frames.length;
     const diffSnapshot = await rpc(
       client,

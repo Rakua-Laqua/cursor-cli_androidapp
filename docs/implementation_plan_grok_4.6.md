@@ -581,6 +581,10 @@ src/foo.ts:120-160
 - Workspace外は拒否。
 - sensitive filesは拒否。
 
+### 実施記録
+
+2026-08-22、v1.10.0 で実装。Assistant 応答のみリンク化。Android は候補抽出、`file.read` の最終 authority は Daemon。Chat 内 read-only Viewer。SM-S928Q Android 16 で受け入れ。次は TASK-303。詳細は `docs/implementation_status.md`。
+
 ---
 
 ## TASK-303: Push Notifications

@@ -301,3 +301,37 @@ test('diff.read command and diff.updated event payloads roundtrip', () => {
   assert.equal(JSON.stringify(command.payload).includes('path'), false);
   assert.equal(JSON.stringify(command.payload).includes('git'), false);
 });
+
+test('file.read command and file content success value roundtrip without file events', () => {
+  const command = {
+    requestId: 'req_file',
+    sessionId: 'remote_sess_123',
+    timestamp: '2026-08-22T00:00:02+09:00',
+    type: 'file.read',
+    payload: {
+      path: 'src/foo.ts',
+    },
+  };
+  const success = remoteCommandSuccess('req_file', {
+    path: 'src/foo.ts',
+    content: 'export const n = 1;\n',
+    truncated: false,
+  });
+
+  assert.deepEqual(parseRemoteCommand(serializeCommand(command)), command);
+  const commandFrame = parseRemoteFrame(serializeRemoteFrame({ kind: 'command', command }));
+  assert.equal(commandFrame.kind, 'command');
+  assert.deepEqual(commandFrame.command, command);
+  assert.equal(command.sessionId, 'remote_sess_123');
+  assert.deepEqual(command.payload, { path: 'src/foo.ts' });
+  assert.equal(JSON.stringify(command.payload).includes('workspaceId'), false);
+  assert.equal(JSON.stringify(command.payload).includes('startLine'), false);
+  assert.equal(JSON.stringify(command.payload).includes('endLine'), false);
+  assert.deepEqual(parseRemoteCommandResult(serializeRemoteCommandResult(success)), success);
+  assert.equal(success.ok, true);
+  assert.equal(success.value.path, 'src/foo.ts');
+  assert.equal(success.value.content, 'export const n = 1;\n');
+  assert.equal(success.value.truncated, false);
+  assert.equal(JSON.stringify(success).includes('file.reference'), false);
+  assert.equal(JSON.stringify(success).includes('file.content'), false);
+});
