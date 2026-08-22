@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## [1.11.0] - 2026-08-22
+
+### 追加
+
+- Android の in-process system notification。アプリが background で process と既存 WebSocket が生存中だけ、`permission.requested` / `agent.completed` / `agent.failed` を即時通知し、`agent.waiting` は 60 秒継続後に通知する。通常 streaming、foreground、`agent.interrupted`、`permission.resolved` は通知しない。通知 tap は MainActivity を開き auto-cancel。notification action と approval action は付けない。権限判断は app 内 approval card のまま。Android 13+ で `POST_NOTIFICATIONS` を deny すると通知しない。同一 `eventId` は process メモリ内で再通知しない。session の waiting timer は terminal / permission / interrupted / 非 Ready 接続で cancel する。FCM、process lifecycle、WebSocket reconnect、notification deep link、Doze は TASK-604。現在の Daemon は `agent.waiting` を emit しないため、その live E2E は未実施で parsing / coordinator unit test のみ。
+
+### 変更
+
+- パッケージ版 1.11.0、Android `versionCode` 24 / `versionName` 1.11.0。Protocol / Daemon / Relay の公開挙動は変えない。
+
+### テスト
+
+- Gradle `:app:testDebugUnitTest :app:assembleDebug :app:lintDebug` pass（53 tasks）。実機事実と未実施範囲は `docs/implementation_status.md`。
+
 ## [1.10.0] - 2026-08-22
 
 ### 追加

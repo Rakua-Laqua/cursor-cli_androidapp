@@ -124,6 +124,13 @@ sealed class ChatEvent {
         val status: String,
     ) : ChatEvent()
 
+    data class AgentWaiting(
+        override val eventId: String,
+        override val sessionId: String,
+        override val timestamp: String,
+        val reason: String?,
+    ) : ChatEvent()
+
     data class AgentCompleted(
         override val eventId: String,
         override val sessionId: String,
@@ -189,6 +196,7 @@ object RemoteProtocol {
             "user.message",
             "assistant.message",
             "assistant.status",
+            "agent.waiting",
             "agent.completed",
             "agent.failed",
             "agent.interrupted",
@@ -484,6 +492,13 @@ object RemoteProtocol {
                     sessionId = sessionId,
                     timestamp = event.timestamp,
                     status = parseAssistantStatusPayload(event.payload),
+                )
+            "agent.waiting" ->
+                ChatEvent.AgentWaiting(
+                    eventId = event.eventId,
+                    sessionId = sessionId,
+                    timestamp = event.timestamp,
+                    reason = parseAgentTerminalPayload(event.payload),
                 )
             "agent.completed" ->
                 ChatEvent.AgentCompleted(

@@ -227,6 +227,29 @@ class FoundationTest {
     }
 
     @Test
+    fun agentWaitingDoesNotChangeChatUi() {
+        withViewModel { viewModel, dao, transport ->
+            runBlocking {
+                dao.upsert(pairedMachine())
+                assertTrue(viewModel.connectExistingMachine("pc-1"))
+                assertTrue(viewModel.openWorkspace("ws-1"))
+                assertTrue(viewModel.resumeSession("sess-1"))
+                hangSessionSend(transport)
+                viewModel.sendPrompt("hello")
+                val before = viewModel.uiState.value
+                transport.emit(eventJson("agent.waiting", "sess-1", """{"reason":"need input"}""", eventId = "evt-wait"))
+                val after = viewModel.uiState.value
+                assertEquals(before.chatMessages, after.chatMessages)
+                assertEquals(before.chatStatus, after.chatStatus)
+                assertEquals(before.chatError, after.chatError)
+                assertEquals(before.chatTerminal, after.chatTerminal)
+                assertEquals(before.isSending, after.isSending)
+                assertEquals(before.pendingPermission, after.pendingPermission)
+            }
+        }
+    }
+
+    @Test
     fun transportMessageQueueDeliversBufferedFramesInOrderWithoutDrop() {
         val queue = TransportMessageQueue()
         val expected = (0 until 120).map { index -> TransportMessage(1L, "frame-$index") }

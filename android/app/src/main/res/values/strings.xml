@@ -1,3 +1,5 @@
 <resources>
     <string name="app_name">Cursor Remote</string>
+    <string name="notification_channel_name">Session events</string>
+    <string name="notification_channel_description">Permission, completion, and waiting alerts</string>
 </resources>

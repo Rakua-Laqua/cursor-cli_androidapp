@@ -157,6 +157,14 @@ class RemoteProtocolTest {
             RemoteProtocol.parseChatEvent(chatRemoteEvent("agent.interrupted", """{"reason":null}"""))
                 as ChatEvent.AgentInterrupted
         assertEquals("sess-1", interrupted.sessionId)
+        val waiting =
+            RemoteProtocol.parseChatEvent(chatRemoteEvent("agent.waiting", """{"reason":"need input"}"""))
+                as ChatEvent.AgentWaiting
+        assertEquals("need input", waiting.reason)
+        val waitingNull =
+            RemoteProtocol.parseChatEvent(chatRemoteEvent("agent.waiting", """{"reason":null}"""))
+                as ChatEvent.AgentWaiting
+        assertNull(waitingNull.reason)
         val workspaceJson =
             """{"workspaceId":"ws-1","name":"app","path":"/app","gitBranch":"main","modified":false,"activeSessionCount":1,"lastUsedAt":null}"""
         val unrelated =
@@ -176,6 +184,7 @@ class RemoteProtocolTest {
         assertChatParseError("text") { chatRemoteEvent("user.message", """{"delta":true}""") }
         assertChatParseError("status") { chatRemoteEvent("session.status_changed", """{"status":"unknown"}""") }
         assertChatParseError("reason") { chatRemoteEvent("agent.completed", """{}""") }
+        assertChatParseError("reason") { chatRemoteEvent("agent.waiting", """{}""") }
     }
 
     @Test

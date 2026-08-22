@@ -423,6 +423,7 @@ class CursorRemoteViewModel(
                     if (state.selectedSessionId != chat.sessionId) state else state.copy(chatStatus = chat.status)
                 }
             }
+            is ChatEvent.AgentWaiting -> Unit
             is ChatEvent.AgentCompleted -> applyTerminal(chat.sessionId, "completed", error = null)
             is ChatEvent.AgentFailed -> applyTerminal(chat.sessionId, "failed", error = chat.reason)
             is ChatEvent.AgentInterrupted -> applyTerminal(chat.sessionId, "interrupted", error = null)

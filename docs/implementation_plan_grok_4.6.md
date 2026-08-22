@@ -600,6 +600,10 @@ long agent.waiting
 
 通常streaming responseは通知しない。
 
+### 実施記録
+
+2026-08-22、v1.11.0 で実装。in-process 限定。SM-S928Q Android 16 で受け入れ。次は TASK-400。詳細は `docs/implementation_status.md`。
+
 ---
 
 # Phase 4 — Models / Usage / Context

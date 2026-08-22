@@ -11,10 +11,16 @@ import dev.cursorremote.android.data.security.AndroidKeystoreDeviceCredentialSto
 import dev.cursorremote.android.data.security.DeviceCredentialStore
 import dev.cursorremote.android.data.transport.OkHttpWebSocketTransport
 import dev.cursorremote.android.data.transport.WebSocketTransport
+import dev.cursorremote.android.notify.PushNotificationCoordinator
+import dev.cursorremote.android.notify.ScheduleAfter
+import dev.cursorremote.android.notify.ScheduledNotification
+import dev.cursorremote.android.notify.SystemNotificationPoster
 import dev.cursorremote.android.state.CursorRemoteViewModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 
 class AppContainer(context: Context) {
     private val applicationScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -37,11 +43,38 @@ class AppContainer(context: Context) {
             scope = applicationScope,
         )
 
+    val pushNotificationCoordinator: PushNotificationCoordinator =
+        PushNotificationCoordinator(
+            poster = SystemNotificationPoster(context.applicationContext),
+            scheduleAfter =
+                ScheduleAfter { delayMs, action ->
+                    val job =
+                        applicationScope.launch {
+                            delay(delayMs)
+                            action()
+                        }
+                    ScheduledNotification { job.cancel() }
+                },
+        )
+
     val viewModelFactory: CursorRemoteViewModelFactory =
         CursorRemoteViewModelFactory(
             database = database,
             remoteRepository = remoteRepository,
         )
+
+    init {
+        applicationScope.launch {
+            remoteRepository.events.collect { event ->
+                pushNotificationCoordinator.onEvent(event)
+            }
+        }
+        applicationScope.launch {
+            remoteRepository.connectionState.collect { state ->
+                pushNotificationCoordinator.onConnectionState(state)
+            }
+        }
+    }
 
     private companion object {
         const val DATABASE_NAME = "cursor_remote.db"
