@@ -2,6 +2,7 @@ package dev.cursorremote.android.data.remote
 
 import dev.cursorremote.android.data.protocol.DiffSnapshot
 import dev.cursorremote.android.data.protocol.FileContent
+import dev.cursorremote.android.data.protocol.ModelCatalog
 import dev.cursorremote.android.data.protocol.IncomingRemoteFrame
 import dev.cursorremote.android.data.protocol.PairingQrPayload
 import dev.cursorremote.android.data.protocol.ProtocolParseError
@@ -131,6 +132,20 @@ class RemoteRepository(
             sendCommand("file.read", RemoteProtocol.fileReadPayload(path), sessionId)
                 ?: throw RemoteRepositoryException("file.read value must be file content.")
         return RemoteProtocol.parseFileContent(value)
+    }
+
+    suspend fun listModels(sessionId: String): ModelCatalog {
+        val value =
+            sendCommand("model.list", RemoteProtocol.modelListPayload(), sessionId)
+                ?: throw RemoteRepositoryException("model.list value must be a catalog.")
+        return RemoteProtocol.parseModelCatalog(value)
+    }
+
+    suspend fun selectModel(sessionId: String, modelId: String): ModelCatalog {
+        val value =
+            sendCommand("model.select", RemoteProtocol.modelSelectPayload(modelId), sessionId)
+                ?: throw RemoteRepositoryException("model.select value must be a catalog.")
+        return RemoteProtocol.parseModelCatalog(value)
     }
 
     fun disconnect() {

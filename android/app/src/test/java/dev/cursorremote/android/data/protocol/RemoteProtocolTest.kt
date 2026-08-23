@@ -333,6 +333,44 @@ class RemoteProtocolTest {
         }
     }
 
+    @Test
+    fun modelCatalogAndSelectionPayloadsParseFixtureWithoutProductionIds() {
+        assertEquals("{}", RemoteProtocol.modelListPayload().toString())
+        assertEquals("""{"modelId":"fixture-added-model"}""", RemoteProtocol.modelSelectPayload("fixture-added-model").toString())
+        val catalogJson =
+            """{"models":[{"id":"mock-model","displayName":"Mock","description":null,"parameters":[],"variants":[],"available":true},{"id":"fixture-added-model","displayName":"fixture-added-model","description":"Fixture only","parameters":[{"id":"p1"}],"variants":["v1"],"available":true},{"id":"unavailable-mock","displayName":"Unavailable Mock","description":null,"parameters":[],"variants":[],"available":false}],"currentModelId":"mock-model"}"""
+        val catalog = RemoteProtocol.parseModelCatalog(kotlinx.serialization.json.Json.parseToJsonElement(catalogJson))
+        assertEquals(listOf("mock-model", "fixture-added-model", "unavailable-mock"), catalog.models.map { it.id })
+        assertEquals("Mock", catalog.models.first().displayName)
+        assertEquals("fixture-added-model", catalog.models[1].displayName)
+        assertEquals("Fixture only", catalog.models[1].description)
+        assertEquals(false, catalog.models[2].available)
+        assertEquals("mock-model", catalog.currentModelId)
+        assertEquals(false, catalog.models.any { it.id.contains("gpt") || it.displayName.contains("GPT") })
+        val extraJson =
+            """{"models":[{"id":"fixture-extra-model","displayName":"Fixture Extra","description":null,"parameters":[],"variants":[],"available":true}],"currentModelId":"fixture-extra-model"}"""
+        val extra = RemoteProtocol.parseModelCatalog(kotlinx.serialization.json.Json.parseToJsonElement(extraJson))
+        assertEquals(listOf("fixture-extra-model"), extra.models.map { it.id })
+        val frame =
+            RemoteProtocol.parseIncomingFrame(
+                """{"kind":"event","event":{"eventId":"e-model","sessionId":"sess-1","timestamp":"t","type":"model.catalog_updated","payload":$catalogJson}}""",
+            ) as IncomingRemoteFrame.Event
+        assertEquals("model.catalog_updated", frame.event.type)
+        assertEquals("sess-1", frame.event.sessionId)
+        val selection =
+            RemoteProtocol.parseModelSelectionChanged(
+                kotlinx.serialization.json.Json.parseToJsonElement("""{"modelId":"fixture-added-model","confirmed":true}"""),
+            )
+        assertEquals("fixture-added-model", selection.modelId)
+        assertEquals(true, selection.confirmed)
+        try {
+            RemoteProtocol.parseModelCatalog(kotlinx.serialization.json.Json.parseToJsonElement("""{"models":[{"id":"","displayName":"x","description":null,"parameters":[],"variants":[],"available":true}],"currentModelId":null}"""))
+            fail("expected ProtocolParseError")
+        } catch (error: ProtocolParseError) {
+            assertTrue(error.message!!.contains("id"))
+        }
+    }
+
     private fun chatRemoteEvent(
         type: String,
         payload: String,

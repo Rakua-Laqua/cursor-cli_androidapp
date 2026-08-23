@@ -335,3 +335,81 @@ test('file.read command and file content success value roundtrip without file ev
   assert.equal(JSON.stringify(success).includes('file.reference'), false);
   assert.equal(JSON.stringify(success).includes('file.content'), false);
 });
+
+test('model.list, model.select, catalog, and selection payloads roundtrip without hardcoded models', () => {
+  const catalog = {
+    models: [
+      {
+        id: 'fixture-added-model',
+        displayName: 'Fixture Added',
+        description: 'Provided by catalog fixture',
+        parameters: [],
+        variants: [],
+        available: true,
+      },
+      {
+        id: 'id-only-model',
+        displayName: 'id-only-model',
+        description: null,
+        parameters: [],
+        variants: [],
+        available: true,
+      },
+    ],
+    currentModelId: 'fixture-added-model',
+  };
+  const catalogEvent = {
+    eventId: 'evt_catalog',
+    sessionId: 'remote_sess_123',
+    timestamp: '2026-08-23T00:00:00+09:00',
+    type: 'model.catalog_updated',
+    payload: catalog,
+  };
+  const selectionEvent = {
+    eventId: 'evt_selection',
+    sessionId: 'remote_sess_123',
+    timestamp: '2026-08-23T00:00:01+09:00',
+    type: 'model.selection_changed',
+    payload: {
+      modelId: 'fixture-added-model',
+      confirmed: true,
+    },
+  };
+  const listCommand = {
+    requestId: 'req_model_list',
+    sessionId: 'remote_sess_123',
+    timestamp: '2026-08-23T00:00:02+09:00',
+    type: 'model.list',
+    payload: {},
+  };
+  const selectCommand = {
+    requestId: 'req_model_select',
+    sessionId: 'remote_sess_123',
+    timestamp: '2026-08-23T00:00:03+09:00',
+    type: 'model.select',
+    payload: {
+      modelId: 'fixture-added-model',
+    },
+  };
+  const success = remoteCommandSuccess('req_model_list', catalog);
+
+  assert.deepEqual(parseRemoteEvent(serializeEvent(catalogEvent)), catalogEvent);
+  assert.deepEqual(parseRemoteEvent(serializeEvent(selectionEvent)), selectionEvent);
+  assert.deepEqual(parseRemoteCommand(serializeCommand(listCommand)), listCommand);
+  assert.deepEqual(parseRemoteCommand(serializeCommand(selectCommand)), selectCommand);
+  assert.deepEqual(parseRemoteCommandResult(serializeRemoteCommandResult(success)), success);
+  const catalogFrame = parseRemoteFrame(
+    serializeRemoteFrame({ kind: 'event', event: catalogEvent }),
+  );
+  assert.equal(catalogFrame.kind, 'event');
+  assert.deepEqual(catalogFrame.event, catalogEvent);
+  const selectFrame = parseRemoteFrame(
+    serializeRemoteFrame({ kind: 'command', command: selectCommand }),
+  );
+  assert.equal(selectFrame.kind, 'command');
+  assert.deepEqual(selectFrame.command, selectCommand);
+  assert.equal(selectCommand.sessionId, 'remote_sess_123');
+  assert.deepEqual(selectCommand.payload, { modelId: 'fixture-added-model' });
+  assert.equal(JSON.stringify(selectCommand.payload).includes('gpt'), false);
+  assert.equal(JSON.stringify(catalog).includes('cursor-grok'), false);
+});

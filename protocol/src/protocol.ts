@@ -155,8 +155,35 @@ export interface DiffSnapshotPayload extends JsonObject {
   readonly totalDeletions: number;
 }
 
+export interface ModelCatalogEntryPayload extends JsonObject {
+  readonly id: string;
+  readonly displayName: string;
+  readonly description: string | null;
+  readonly parameters: JsonValue[];
+  readonly variants: JsonValue[];
+  readonly available: boolean;
+}
+
+export interface ModelCatalogPayload extends JsonObject {
+  readonly models: ModelCatalogEntryPayload[];
+  readonly currentModelId: string | null;
+}
+
+export interface ModelSelectionChangedPayload extends JsonObject {
+  readonly modelId: string;
+  readonly confirmed: boolean;
+}
+
+export interface ModelListCommandPayload extends JsonObject {}
+
+export interface ModelSelectCommandPayload extends JsonObject {
+  readonly modelId: string;
+}
+
 export interface KnownEventPayloads {
   readonly 'workspace.updated': WorkspaceUpdatedPayload;
+  readonly 'model.catalog_updated': ModelCatalogPayload;
+  readonly 'model.selection_changed': ModelSelectionChangedPayload;
   readonly 'session.created': SessionPayload;
   readonly 'session.loaded': SessionPayload;
   readonly 'session.status_changed': SessionStatusChangedPayload;

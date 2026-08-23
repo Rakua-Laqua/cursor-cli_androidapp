@@ -2,4 +2,8 @@
     <string name="app_name">Cursor Remote</string>
     <string name="notification_channel_name">Session events</string>
     <string name="notification_channel_description">Permission, completion, and waiting alerts</string>
+    <string name="model_unavailable">Model unavailable</string>
+    <string name="model_refresh">Refresh models</string>
+    <string name="model_pending">Pending</string>
+    <string name="model_select">Select model</string>
 </resources>

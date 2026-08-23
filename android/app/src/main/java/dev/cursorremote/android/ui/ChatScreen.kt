@@ -26,6 +26,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
@@ -34,6 +35,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
+import dev.cursorremote.android.R
 import dev.cursorremote.android.data.protocol.DiffFileInfo
 import dev.cursorremote.android.state.ChatMessage
 import dev.cursorremote.android.state.ChatRole
@@ -51,6 +53,9 @@ fun ChatScreen(
     onRefreshDiff: () -> Unit,
     onToggleDiffFile: (path: String) -> Unit,
     onOpenFile: (path: String, startLine: Int?, endLine: Int?) -> Unit,
+    onRefreshModels: () -> Unit,
+    onSelectModel: (modelId: String) -> Unit,
+    onToggleModelPicker: () -> Unit,
 ) {
     var draft by rememberSaveable { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -65,6 +70,12 @@ fun ChatScreen(
         TextButton(onClick = onBack) { Text("Back") }
         Text("Chat", style = MaterialTheme.typography.headlineSmall)
         StatusBlock(uiState)
+        ModelPanel(
+            uiState = uiState,
+            onRefreshModels = onRefreshModels,
+            onSelectModel = onSelectModel,
+            onToggleModelPicker = onToggleModelPicker,
+        )
         ChatStatusLabels(uiState)
         if (uiState.selectedWorkspaceId != null) {
             DiffPanel(uiState = uiState, onRefreshDiff = onRefreshDiff, onToggleDiffFile = onToggleDiffFile)
@@ -102,6 +113,48 @@ fun ChatScreen(
                 onClick = onStop,
                 enabled = uiState.isSending && !uiState.isStopping,
             ) { Text("Stop") }
+        }
+    }
+}
+
+@Composable
+private fun ModelPanel(
+    uiState: CursorRemoteUiState,
+    onRefreshModels: () -> Unit,
+    onSelectModel: (modelId: String) -> Unit,
+    onToggleModelPicker: () -> Unit,
+) {
+    val confirmedName =
+        uiState.modelCatalog.firstOrNull { it.id == uiState.currentModelId }?.displayName
+            ?: uiState.currentModelId
+    val headerLabel = confirmedName ?: stringResource(R.string.model_unavailable)
+    val availableModels = uiState.modelCatalog.filter { it.available }
+    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        Text(
+            text = headerLabel,
+            style = MaterialTheme.typography.titleSmall,
+            modifier = Modifier.fillMaxWidth().clickable(onClick = onToggleModelPicker),
+        )
+        uiState.pendingModelId?.let { pendingId ->
+            val pendingName = uiState.modelCatalog.firstOrNull { it.id == pendingId }?.displayName ?: pendingId
+            Text("${stringResource(R.string.model_pending)}: $pendingName")
+        }
+        uiState.modelError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+        Button(
+            onClick = onRefreshModels,
+            enabled = !uiState.modelsLoading && uiState.selectedSessionId != null,
+        ) { Text(stringResource(R.string.model_refresh)) }
+        if (uiState.modelPickerVisible) {
+            Text(stringResource(R.string.model_select), style = MaterialTheme.typography.titleSmall)
+            availableModels.forEach { model ->
+                val pending = uiState.pendingModelId != null || uiState.modelsLoading
+                TextButton(
+                    onClick = { onSelectModel(model.id) },
+                    enabled = !pending && model.id != uiState.currentModelId,
+                ) {
+                    Text(model.displayName)
+                }
+            }
         }
     }
 }

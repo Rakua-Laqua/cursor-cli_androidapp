@@ -1,13 +1,13 @@
 # 実装進捗スナップショット
 
 - 文書バージョン: v0.1
-- 記録日: 2026-08-22
+- 記録日: 2026-08-23
 - 対象設計書: `docs/cursor_remote_android_spec_v0.3.md`
 - 実装計画: `docs/implementation_plan_grok_4.6.md`
 - 対象リポジトリ: `Rakua-Laqua/cursor-cli_androidapp`
 - ブランチ: `main`
 - 直前リリース基準（v1.3.0）: `c7bff3137511396d8a86d27a341fcddb70f8b316`（`v1.3.0にアップデート`）
-- パッケージ版: `1.11.0`（Android `versionCode` 24 / `versionName` 1.11.0）
+- パッケージ版: `1.12.0`（Android `versionCode` 25 / `versionName` 1.12.0）
 
 この文書は「いまどこまで動くか」の正本である。設計の正本は仕様書、作業順の正本は実装計画である。計画書の未着手タスクを消さない。完了扱いにできるのはリリース済みの範囲だけである。
 
@@ -15,7 +15,7 @@
 
 ## 1. いまの結論
 
-**Cursor Desktop なしで、PC 上の Local Daemon だけから Workspace / Session を操作し、Android からメモリ内 Chat を送受信し、実 ACP の permission を Approve / Reject でき、選択中 Workspace の変更 Diff を手動で確認でき、Assistant 応答内の workspace ファイルを read-only Viewer で開け、background かつ process / 既存 WebSocket 生存中に対象 event を in-process 通知できる。** Relay 経由の Command / Event 中継も localhost では動く。Device Pairing は v1.4.0、Android Skeleton は v1.5.0、Workspace / Session UI は v1.6.0、Chat は v1.7.0、Permission Flow は v1.8.0、Diff Pipeline は v1.9.0、応答内ファイルリンクは v1.10.0、in-process 通知は v1.11.0。QR カメラ、TLS、履歴永続化 / 再接続復元は未完。次は TASK-400。
+**Cursor Desktop なしで、PC 上の Local Daemon だけから Workspace / Session を操作し、Android からメモリ内 Chat を送受信し、実 ACP の permission を Approve / Reject でき、選択中 Workspace の変更 Diff を手動で確認でき、Assistant 応答内の workspace ファイルを read-only Viewer で開け、background かつ process / 既存 WebSocket 生存中に対象 event を in-process 通知でき、Chat header の Model Picker で選択中 Session の動的 catalog からモデルを切り替えられる。** Relay 経由の Command / Event 中継も localhost では動く。Device Pairing は v1.4.0、Android Skeleton は v1.5.0、Workspace / Session UI は v1.6.0、Chat は v1.7.0、Permission Flow は v1.8.0、Diff Pipeline は v1.9.0、応答内ファイルリンクは v1.10.0、in-process 通知は v1.11.0、動的 Model Catalog は v1.12.0。QR カメラ、TLS、履歴永続化 / 再接続復元、Model Visibility、Context / Usage は未完。次は TASK-401。
 
 | 区分 | 状態 |
 | --- | --- |
@@ -32,9 +32,11 @@
 | TASK-301 Diff Pipeline | **完了・v1.9.0** |
 | TASK-302 Cursor Response File Links | **完了・v1.10.0** |
 | TASK-303 Push Notifications | **完了・v1.11.0**。in-process 限定 |
-| Phase 3 | TASK-300〜303 完了。次は TASK-400 |
+| TASK-400 Dynamic Model Catalog | **完了・v1.12.0**。実機未実施 |
+| Phase 3 | TASK-300〜303 完了 |
+| Phase 4 | TASK-400 完了。次は TASK-401 |
 
-次の作業は TASK-400 である。
+次の作業は TASK-401 である。
 
 ---
 
@@ -77,6 +79,10 @@
 
 - アプリが background で process と既存 WebSocket が生存中だけ、`permission.requested` / `agent.completed` / `agent.failed` を即時通知し、`agent.waiting` は 60 秒継続後に通知する。通常 streaming、foreground、`agent.interrupted`、`permission.resolved` は通知しない。tap は MainActivity、auto-cancel。notification action は付けない。`POST_NOTIFICATIONS` deny 時は通知しない。同一 `eventId` は process メモリ内で再通知しない。
 
+### 動く（v1.12.0）
+
+- Chat header の Model Picker。選択中 Session の動的 catalog から available モデルだけを選び、手動 Refresh と pending / 確定 / error を扱う。catalog は新規 Session または明示 load の ACP 応答で更新する。詳細の制約と検証は `CHANGELOG.md` の 1.12.0。
+
 ### まだない
 
 - Pairing の CLI / QR 表示 UI（`remote-dev` に pairing サブコマンドはない）。
@@ -85,6 +91,7 @@
 - Chat 履歴の永続化と再接続復元。
 - FCM、process 死亡後の到達、WebSocket reconnect、notification deep link、Doze（TASK-604）。
 - Account Usage、File content 保存、Voice。
+- Model Visibility / Manage Models（TASK-401）。Context / Usage（TASK-402 以降）。
 - Diff の agent 完了連動の自動更新。
 - 単発 `session cancel`（別プロセスからの停止は未実測のため非公開）。
 - `agent.waiting` の live E2E（current Daemon に emitter が無い。parsing / coordinator unit test のみ）。
@@ -96,6 +103,7 @@
 状態の意味:
 
 - **リリース済み**: パッケージ版 v1.4.0 までに含まれるバックエンド。v1.3.0 の基準コミットは `c7bff3137511396d8a86d27a341fcddb70f8b316`。
+- **実装済み v1.12.0**: TASK-400 Dynamic Model Catalog。
 - **実装済み v1.11.0**: TASK-303 Push Notifications（in-process）。
 - **実装済み v1.10.0**: TASK-302 Cursor Response File Links。
 - **実装済み v1.9.0**: TASK-301 Diff Pipeline。
@@ -112,7 +120,7 @@
 | TASK-000 | `android/` `daemon/` `relay/` `protocol/` `docs/` の module boundary、format / lint | リリース済み |
 | TASK-001 | Remote Protocol の Event / Command 型と JSON 境界 | リリース済み。v1.3.0 で `command` / `event` / `result` frame を追加 |
 
-Android は TASK-303 まで。Gate B / C は通過。Gate D は TASK-500 の将来 gate であり未通過。
+Android は TASK-400 まで。Gate B / C は通過。Gate D は TASK-500 の将来 gate であり未通過。
 
 ### Phase 1 — Cursor CLI Local Core（Milestone 1）
 
@@ -150,7 +158,7 @@ Phase 2 の Chat は v1.7.0。Gate B は 2026-08-22 に通過。実機記録は 
 
 ### Phase 3 以降
 
-TASK-300 Permission Flow は **v1.8.0 で完了**。Gate C 通過。TASK-301 Diff Pipeline は **v1.9.0 で完了**。TASK-302 Cursor Response File Links は **v1.10.0 で完了**。TASK-303 Push Notifications は **v1.11.0 で完了**。Phase 3 はここまで。次は TASK-400。Gate D は TASK-500 Audio Routing の将来 gate であり未通過。
+TASK-300 Permission Flow は **v1.8.0 で完了**。Gate C 通過。TASK-301 Diff Pipeline は **v1.9.0 で完了**。TASK-302 Cursor Response File Links は **v1.10.0 で完了**。TASK-303 Push Notifications は **v1.11.0 で完了**。Phase 3 はここまで。TASK-400 Dynamic Model Catalog は **v1.12.0 で完了**。次は TASK-401。Gate D は TASK-500 Audio Routing の将来 gate であり未通過。
 
 ---
 
@@ -337,6 +345,12 @@ Android の in-process system notification。配信は生きている process �
 
 ---
 
+## 7.6 TASK-400（v1.12.0）
+
+ACP `session/new` / `session/load` の models / configOptions を防御的に共通 catalog へ変換する。Android Chat header の Model Picker は選択中 Session の available モデルだけを出す。モデル ID / 名前 / parameter / variant は固定しない。専用 refresh ACP method は推測しない。Model Visibility は TASK-401、Context / Usage は TASK-402 以降。実機検証は未実施。検証結果は §8。
+
+---
+
 ## 8. 検証の記録
 
 | 対象 | 結果 | 備考 |
@@ -352,6 +366,9 @@ Android の in-process system notification。配信は生きている process �
 | `npm test` v1.9.0 | 成功 | protocol 14 / daemon 101 / relay 8、fail 0。`npm lint` pass。targeted Prettier pass |
 | `npm test` v1.10.0 | 成功 | protocol 15 / daemon 112 / relay 8、fail 0。`npm run lint` pass。対象 TS/MJS の Prettier check pass。Gradle 53 tasks pass |
 | Gradle v1.11.0 | 成功 | `:app:testDebugUnitTest :app:assembleDebug :app:lintDebug` 53 tasks pass |
+| `npm test` v1.12.0 | 成功 | protocol 16 / daemon 114 / relay 8、fail 0。`npm run lint` pass。targeted Prettier pass |
+| Gradle v1.12.0 | 成功 | `:app:testDebugUnitTest :app:assembleDebug :app:lintDebug` 53 tasks pass。初回は選択成功 result を捨てる二重 `model.list` で 1 件失敗し、修正後 pass |
+| Android 実機 Model Catalog（TASK-400） | 未実施 | ユーザー方針により実機検証なし |
 | Android 実機 Chat（Gate B） | 通過（2026-08-22） | SM-S928Q / Android 16。下記 |
 | Android 実機 Permission（Gate C） | 通過（2026-08-22） | SM-S928Q / Android 16。下記 |
 | Android 実機 Diff（TASK-301） | 受け入れ（2026-08-22） | SM-S928Q / Android 16。下記 |
@@ -372,12 +389,12 @@ TASK-303（2026-08-22、同端末）: localhost Relay と adb reverse。foregrou
 
 ## 9. モジュール別の現状
 
-| モジュール | 実装済み v1.11.0 | 未着手 |
+| モジュール | 実装済み v1.12.0 | 未着手 |
 | --- | --- | --- |
-| `protocol/` | Event / Command 型、Remote frame、Pairing 型・証明・QR payload、permission requested/resolved と permissionId のみの approve/reject、diff snapshot payload、`file.read` / FileContent payload。`agent.waiting` は既存共有型 | Android 向け追加画面用の型は不要な範囲で増やさない |
-| `daemon/` | ACP、Workspace、metadata、`remote-dev`、Relay outbound、`PairingManager`、device 永続化、PermissionBridge（fail-closed）、bounded Git DiffPipeline、session-bound `file.read` | pairing CLI、`agent.waiting` emitter |
+| `protocol/` | Event / Command 型、Remote frame、Pairing 型・証明・QR payload、permission requested/resolved と permissionId のみの approve/reject、diff snapshot payload、`file.read` / FileContent payload、model catalog / select payload。`agent.waiting` は既存共有型 | Android 向け追加画面用の型は不要な範囲で増やさない |
+| `daemon/` | ACP、Workspace、metadata、`remote-dev`、Relay outbound、`PairingManager`、device 永続化、PermissionBridge（fail-closed）、bounded Git DiffPipeline、session-bound `file.read`、ACP models / configOptions からの防御的 catalog と `session/set_config_option` | pairing CLI、`agent.waiting` emitter |
 | `relay/` | WebSocket routing / correlation / heartbeat、`/client` の pairing ゲート。generic のまま | TLS |
-| `android/` | TASK-204 Chat（メモリ内）、TASK-300 Permission approval card、TASK-301 手動 Diff UI、TASK-302 応答内リンクと read-only Viewer、TASK-303 in-process 通知 | QR カメラ、履歴永続化 / 再接続復元、FCM / reconnect / deep link / Doze（TASK-604） |
+| `android/` | TASK-204 Chat（メモリ内）、TASK-300 Permission approval card、TASK-301 手動 Diff UI、TASK-302 応答内リンクと read-only Viewer、TASK-303 in-process 通知、TASK-400 Chat header Model Picker | QR カメラ、履歴永続化 / 再接続復元、FCM / reconnect / deep link / Doze（TASK-604）、Model Visibility（TASK-401） |
 | `docs/` | 仕様、計画、ACP 実測、Local E2E、本ファイル | — |
 
 ---
@@ -387,7 +404,7 @@ TASK-303（2026-08-22、同端末）: localhost Relay と adb reverse。foregrou
 計画書と Gate を崩さない。
 
 ```text
-TASK-400 Dynamic Model Catalog
+TASK-401 Model Visibility
 ```
 
-TASK-303 は v1.11.0。Gate D は TASK-500 の将来 gate であり未通過。Camera / TLS / 履歴永続化 / 再接続復元 / FCM は未完。
+TASK-400 は v1.12.0。Gate D は TASK-500 の将来 gate であり未通過。Camera / TLS / 履歴永続化 / 再接続復元 / FCM は未完。

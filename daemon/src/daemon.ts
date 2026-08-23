@@ -4,6 +4,7 @@ import type {
   DiffSnapshotPayload,
   FileContentPayload,
   KnownRemoteEvent,
+  ModelCatalogPayload,
   RemoteCommand,
   SessionPayload,
   WorkspaceUpdatedPayload,
@@ -138,6 +139,7 @@ export class Daemon {
     | WorkspaceUpdatedPayload[]
     | DiffSnapshotPayload
     | FileContentPayload
+    | ModelCatalogPayload
     | undefined
   > {
     if (command.type === 'workspace.list' || command.type === 'workspace.register') {

@@ -1,5 +1,20 @@
 # CHANGELOG
 
+## [1.12.0] - 2026-08-23
+
+### 追加
+
+- Android Chat header の Model Picker。選択中 Session の動的 catalog から available なモデルだけを出し、手動 Refresh、pending / 確定 / error を表示する。表示名は catalog の `displayName`、無ければ `currentModelId`。固定のモデル ID / 名前 / parameter / variant は持たない。
+- ACP `session/new` と `session/load` の `models.availableModels` / `currentModelId` / `configOptions` を防御的に共通 catalog へ変換する。`model.list` は選択 Session の cache。`model.select` は catalog 内 available だけを、`configOptions` から得た `configId` で `session/set_config_option` へ送る。Run 中は拒否し、成功後だけ確定・metadata・event を更新する。新しい catalog は新規 Session または明示 load の ACP 応答でのみ検出する。専用 refresh ACP method は推測しない。
+
+### 変更
+
+- パッケージ版 1.12.0、Android `versionCode` 25 / `versionName` 1.12.0。Model Visibility / Manage Models は TASK-401、Context / Usage は TASK-402 以降。
+
+### テスト
+
+- `npm test` は protocol 16 / daemon 114 / relay 8、全 pass。`npm run lint` pass。targeted Prettier pass。Gradle `:app:testDebugUnitTest :app:assembleDebug :app:lintDebug` BUILD SUCCESSFUL（53 tasks）。初回 Android unit test は選択成功 result を捨てる二重 `model.list` で 1 件失敗し、修正後 pass。実機検証は未実施。
+
 ## [1.11.0] - 2026-08-22
 
 ### 追加

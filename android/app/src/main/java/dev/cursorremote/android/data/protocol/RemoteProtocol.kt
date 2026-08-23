@@ -80,6 +80,25 @@ data class FileContent(
     val truncated: Boolean,
 )
 
+data class ModelCatalogEntry(
+    val id: String,
+    val displayName: String,
+    val description: String?,
+    val parameters: List<JsonElement>,
+    val variants: List<JsonElement>,
+    val available: Boolean,
+)
+
+data class ModelCatalog(
+    val models: List<ModelCatalogEntry>,
+    val currentModelId: String?,
+)
+
+data class ModelSelectionChanged(
+    val modelId: String,
+    val confirmed: Boolean,
+)
+
 data class RemoteCommandResult(val requestId: String, val ok: Boolean, val value: JsonElement?, val error: String?)
 
 data class RemoteEvent(
@@ -444,12 +463,35 @@ object RemoteProtocol {
         return buildJsonObject { put("path", path) }
     }
 
+    fun modelListPayload(): JsonObject = buildJsonObject {}
+
+    fun modelSelectPayload(modelId: String): JsonObject {
+        requireNonEmpty(modelId, "modelId")
+        return buildJsonObject { put("modelId", modelId) }
+    }
+
     fun parseFileContent(value: JsonElement?): FileContent {
         val root = parseObject(value ?: throw ProtocolParseError("file content must be a JSON object."), "file content")
         return FileContent(
             path = requireNonEmptyString(root, "path"),
             content = requireStringField(root, "content"),
             truncated = requireBoolean(root, "truncated"),
+        )
+    }
+
+    fun parseModelCatalog(value: JsonElement?): ModelCatalog {
+        val root = parseObject(value ?: throw ProtocolParseError("model catalog must be a JSON object."), "model catalog")
+        return ModelCatalog(
+            models = parseList(root["models"], "models", ::parseModelCatalogEntry),
+            currentModelId = requireNullableString(root, "currentModelId"),
+        )
+    }
+
+    fun parseModelSelectionChanged(value: JsonElement): ModelSelectionChanged {
+        val root = parseObject(value, "model.selection_changed")
+        return ModelSelectionChanged(
+            modelId = requireNonEmptyString(root, "modelId"),
+            confirmed = requireBoolean(root, "confirmed"),
         )
     }
 
@@ -637,6 +679,8 @@ object RemoteProtocol {
             "workspace.updated" -> parseWorkspace(payload)
             "session.created", "session.loaded" -> parseSession(payload)
             "diff.updated" -> parseDiffSnapshot(payload)
+            "model.catalog_updated" -> parseModelCatalog(payload)
+            "model.selection_changed" -> parseModelSelectionChanged(payload)
         }
         val event =
             RemoteEvent(
@@ -718,6 +762,18 @@ object RemoteProtocol {
         return buildJsonObject { put("permissionId", permissionId) }
     }
 
+    private fun parseModelCatalogEntry(value: JsonElement): ModelCatalogEntry {
+        val root = parseObject(value, "model")
+        return ModelCatalogEntry(
+            id = requireNonEmptyString(root, "id"),
+            displayName = requireNonEmptyString(root, "displayName"),
+            description = requireNullableString(root, "description"),
+            parameters = requireJsonValueArray(root, "parameters"),
+            variants = requireJsonValueArray(root, "variants"),
+            available = requireBoolean(root, "available"),
+        )
+    }
+
     private fun parseDiffFile(value: JsonElement): DiffFileInfo {
         val root = parseObject(value, "diff file")
         val change = requireNonEmptyString(root, "change")
@@ -791,6 +847,18 @@ object RemoteProtocol {
             put("x", publicKey.x)
             put("y", publicKey.y)
         }
+
+    private fun requireJsonValueArray(
+        root: JsonObject,
+        key: String,
+    ): List<JsonElement> {
+        val value = root[key] ?: throw ProtocolParseError("$key must be a JSON array.")
+        val array = value as? JsonArray ?: throw ProtocolParseError("$key must be a JSON array.")
+        if (!array.all { isJsonValue(it) }) {
+            throw ProtocolParseError("$key must be valid JSON data.")
+        }
+        return array.toList()
+    }
 
     private fun <T> parseList(
         value: JsonElement?,

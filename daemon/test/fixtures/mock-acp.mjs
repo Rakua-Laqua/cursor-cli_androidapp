@@ -12,17 +12,28 @@ function sendUpdate(sessionId, update) {
   });
 }
 
-function sessionMeta() {
+function fixtureModels() {
+  return [
+    { id: 'mock-model', name: 'Mock' },
+    { id: 'mock-fast', name: 'Mock Fast', description: 'Faster mock' },
+    { id: 'fixture-added-model' },
+  ];
+}
+
+function sessionMeta(currentModelId = 'mock-model') {
   return {
     modes: {
       currentModeId: 'agent',
       availableModes: [{ id: 'agent', name: 'Agent' }],
     },
     models: {
-      currentModelId: 'mock-model',
-      availableModels: [{ id: 'mock-model', name: 'Mock' }],
+      currentModelId,
+      availableModels: fixtureModels(),
     },
-    configOptions: [],
+    configOptions: [
+      { id: 'mode', category: 'mode', type: 'select', currentValue: 'agent' },
+      { id: 'model', category: 'model', type: 'select', currentValue: currentModelId },
+    ],
   };
 }
 
@@ -166,6 +177,7 @@ function requestObservedPermission(sessionId) {
 
 const pendingPeer = new Map();
 const sessions = new Set();
+const sessionCurrentModels = new Map();
 const pendingCancels = new Set();
 const delayWaiters = new Map();
 let sessionSeq = 0;
@@ -262,12 +274,13 @@ rl.on('line', (line) => {
     sessionSeq += 1;
     const sessionId = `sess-${sessionSeq}`;
     sessions.add(sessionId);
+    sessionCurrentModels.set(sessionId, 'mock-model');
     send({
       jsonrpc: '2.0',
       id,
       result: {
         sessionId,
-        ...sessionMeta(),
+        ...sessionMeta('mock-model'),
       },
     });
     return;
@@ -284,7 +297,14 @@ rl.on('line', (line) => {
       return;
     }
     sessions.add(sessionId);
-    send({ jsonrpc: '2.0', id, result: sessionMeta() });
+    if (!sessionCurrentModels.has(sessionId)) {
+      sessionCurrentModels.set(sessionId, 'mock-model');
+    }
+    send({
+      jsonrpc: '2.0',
+      id,
+      result: sessionMeta(sessionCurrentModels.get(sessionId)),
+    });
     return;
   }
 
@@ -310,6 +330,50 @@ rl.on('line', (line) => {
         resume();
       }
     }
+    return;
+  }
+
+  if (method === 'session/set_config_option') {
+    const sessionId = params?.sessionId;
+    const configId = params?.configId;
+    const value = params?.value;
+    if (typeof sessionId !== 'string' || !sessions.has(sessionId)) {
+      send({
+        jsonrpc: '2.0',
+        id,
+        error: { code: -32602, message: 'Unknown session' },
+      });
+      return;
+    }
+    if (
+      typeof configId !== 'string' ||
+      configId.length === 0 ||
+      typeof value !== 'string' ||
+      value.length === 0
+    ) {
+      send({
+        jsonrpc: '2.0',
+        id,
+        error: { code: -32602, message: 'configId and value are required' },
+      });
+      return;
+    }
+    const allowed = fixtureModels().some((model) => model.id === value);
+    if (configId !== 'model' || !allowed) {
+      send({
+        jsonrpc: '2.0',
+        id,
+        error: { code: -32602, message: 'Unknown model config option' },
+      });
+      return;
+    }
+    sessionCurrentModels.set(sessionId, value);
+    const meta = sessionMeta(value);
+    send({
+      jsonrpc: '2.0',
+      id,
+      result: { configOptions: meta.configOptions, currentValue: value },
+    });
     return;
   }
 

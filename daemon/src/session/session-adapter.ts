@@ -3,7 +3,10 @@ import { randomUUID } from 'node:crypto';
 import type {
   AgentTerminalPayload,
   JsonObject,
+  JsonValue,
   KnownRemoteEvent,
+  ModelCatalogEntryPayload,
+  ModelCatalogPayload,
   RemoteCommand,
   SessionPayload,
   SessionStatus,
@@ -36,6 +39,8 @@ interface TrackedSession {
   updatedAt: string;
   lastEventId: string | null;
   selectedModelId: string | null;
+  availableModels: ModelCatalogEntryPayload[];
+  configOptions: JsonObject[];
 }
 
 const CLIENT_INFO = {
@@ -102,6 +107,7 @@ export class AcpSessionAdapter {
     });
     const cursorSessionId = readRequiredString(result, 'sessionId', 'session/new');
     const title = input.title ?? 'Session';
+    const catalog = readModelCatalog(result);
     const session: TrackedSession = {
       remoteSessionId: randomUUID(),
       cursorSessionId,
@@ -112,11 +118,14 @@ export class AcpSessionAdapter {
       createdAt,
       updatedAt: createdAt,
       lastEventId: null,
-      selectedModelId: readCurrentModelId(result),
+      selectedModelId: catalog.currentModelId,
+      availableModels: catalog.models,
+      configOptions: catalog.configOptions,
     };
     this.track(session);
     this.workspaces.markUsed(workspace.workspaceId);
     this.emitSession('session.created', session);
+    this.emitCatalog(session);
     this.persist();
     if (input.initialPrompt.length > 0) {
       await this.runPrompt(session, input.initialPrompt);
@@ -137,10 +146,14 @@ export class AcpSessionAdapter {
     session.status = 'idle';
     session.updatedAt = nowIso();
     session.workspacePath = cwd;
-    session.selectedModelId = readCurrentModelId(loadResult);
+    const catalog = readModelCatalog(loadResult);
+    session.selectedModelId = catalog.currentModelId;
+    session.availableModels = catalog.models;
+    session.configOptions = catalog.configOptions;
     this.workspaces.markUsed(session.workspaceId);
     this.emitSession('session.loaded', session);
     this.emitStatus(session, 'idle');
+    this.emitCatalog(session);
     this.persist();
     return toPayload(session);
   }
@@ -167,6 +180,49 @@ export class AcpSessionAdapter {
     this.acp.notify('session/cancel', { sessionId: session.cursorSessionId });
   }
 
+  private listModels(remoteSessionId: string): ModelCatalogPayload {
+    return toCatalogPayload(this.requireSession(remoteSessionId));
+  }
+
+  private async selectModel(
+    remoteSessionId: string,
+    modelId: string,
+  ): Promise<ModelCatalogPayload> {
+    const session = this.requireSession(remoteSessionId);
+    assertPromptNotInProgress(session);
+    if (modelId.length === 0) {
+      throw new Error('modelId must be a string');
+    }
+    const selected = session.availableModels.find(
+      (model) => model.id === modelId && model.available,
+    );
+    if (selected === undefined) {
+      throw new Error('Unknown or unavailable model');
+    }
+    const configId = resolveModelConfigId(session.configOptions);
+    if (configId === null) {
+      throw new Error('Model config option is not available');
+    }
+    const result = await this.acp.request('session/set_config_option', {
+      sessionId: session.cursorSessionId,
+      configId,
+      value: modelId,
+    });
+    const confirmedId = readConfirmedModelId(result, modelId);
+    const nextOptions = readConfigOptions(result);
+    session.selectedModelId = confirmedId;
+    session.updatedAt = nowIso();
+    if (nextOptions.length > 0) {
+      session.configOptions = nextOptions;
+    }
+    this.persist();
+    this.emit(session.remoteSessionId, 'model.selection_changed', {
+      modelId: confirmedId,
+      confirmed: true,
+    });
+    return toCatalogPayload(session);
+  }
+
   handleIncomingRequest(request: AcpIncomingRequest): Promise<unknown> {
     if (request.method !== 'session/request_permission') {
       return Promise.reject(new Error(`Method not found: ${request.method}`));
@@ -176,8 +232,15 @@ export class AcpSessionAdapter {
 
   async handleCommand(
     command: RemoteCommand,
-  ): Promise<SessionPayload | SessionPayload[] | undefined> {
+  ): Promise<SessionPayload | SessionPayload[] | ModelCatalogPayload | undefined> {
     switch (command.type) {
+      case 'model.list':
+        return this.listModels(readCommandSessionId(command.sessionId));
+      case 'model.select':
+        return this.selectModel(
+          readCommandSessionId(command.sessionId),
+          readCommandString(command.payload, 'modelId'),
+        );
       case 'session.create':
         return this.create({
           workspaceId: readCommandString(command.payload, 'workspaceId'),
@@ -392,6 +455,10 @@ export class AcpSessionAdapter {
     this.emit(session.remoteSessionId, 'session.status_changed', { status });
   }
 
+  private emitCatalog(session: TrackedSession): void {
+    this.emit(session.remoteSessionId, 'model.catalog_updated', toCatalogPayload(session));
+  }
+
   private emit(
     sessionId: string,
     type: KnownRemoteEvent['type'],
@@ -441,6 +508,8 @@ export class AcpSessionAdapter {
       updatedAt: record.updatedAt,
       lastEventId: record.lastEventId,
       selectedModelId: record.selectedModelId,
+      availableModels: [],
+      configOptions: [],
     };
     this.track(session);
   }
@@ -474,6 +543,13 @@ function toPayload(session: TrackedSession): SessionPayload {
   };
 }
 
+function toCatalogPayload(session: TrackedSession): ModelCatalogPayload {
+  return {
+    models: session.availableModels,
+    currentModelId: session.selectedModelId,
+  };
+}
+
 function nowIso(): string {
   return new Date().toISOString();
 }
@@ -498,6 +574,125 @@ function readCurrentModelId(value: unknown): string | null {
   }
   const modelId = value.models.currentModelId;
   return typeof modelId === 'string' && modelId.length > 0 ? modelId : null;
+}
+
+function readModelCatalog(value: unknown): {
+  models: ModelCatalogEntryPayload[];
+  currentModelId: string | null;
+  configOptions: JsonObject[];
+} {
+  return {
+    models: readAvailableModels(value),
+    currentModelId: readCurrentModelId(value),
+    configOptions: readConfigOptions(value),
+  };
+}
+
+function readAvailableModels(value: unknown): ModelCatalogEntryPayload[] {
+  if (!isRecord(value) || !isRecord(value.models) || !Array.isArray(value.models.availableModels)) {
+    return [];
+  }
+  const models: ModelCatalogEntryPayload[] = [];
+  for (const entry of value.models.availableModels) {
+    if (!isRecord(entry) || typeof entry.id !== 'string' || entry.id.length === 0) {
+      continue;
+    }
+    const name = typeof entry.name === 'string' && entry.name.length > 0 ? entry.name : null;
+    const displayNameRaw =
+      typeof entry.displayName === 'string' && entry.displayName.length > 0
+        ? entry.displayName
+        : null;
+    const description =
+      typeof entry.description === 'string' && entry.description.length > 0
+        ? entry.description
+        : null;
+    models.push({
+      id: entry.id,
+      displayName: name ?? displayNameRaw ?? entry.id,
+      description,
+      parameters: readJsonValueArray(entry.parameters),
+      variants: readJsonValueArray(entry.variants),
+      available: entry.available === false ? false : true,
+    });
+  }
+  return models;
+}
+
+function readConfigOptions(value: unknown): JsonObject[] {
+  const raw = isRecord(value) && Array.isArray(value.configOptions) ? value.configOptions : value;
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+  const options: JsonObject[] = [];
+  for (const entry of raw) {
+    if (isRecord(entry)) {
+      options.push(entry as JsonObject);
+    }
+  }
+  return options;
+}
+
+function resolveModelConfigId(options: JsonObject[]): string | null {
+  for (const option of options) {
+    const id = option.id;
+    const category = option.category;
+    if (typeof id !== 'string' || id.length === 0) {
+      continue;
+    }
+    if (category === 'model' || id === 'model') {
+      return id;
+    }
+  }
+  return null;
+}
+
+function readConfirmedModelId(result: unknown, requestedId: string): string {
+  if (isRecord(result)) {
+    if (typeof result.currentValue === 'string' && result.currentValue.length > 0) {
+      return result.currentValue;
+    }
+    if (typeof result.value === 'string' && result.value.length > 0) {
+      return result.value;
+    }
+  }
+  const options = readConfigOptions(result);
+  const modelOption = options.find(
+    (option) => option.category === 'model' || option.id === 'model',
+  );
+  const optionValue = modelOption?.currentValue ?? modelOption?.value;
+  if (typeof optionValue === 'string' && optionValue.length > 0) {
+    return optionValue;
+  }
+  return requestedId;
+}
+
+function readJsonValueArray(value: unknown): JsonValue[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const items: JsonValue[] = [];
+  for (const item of value) {
+    if (isJsonValue(item)) {
+      items.push(item);
+    }
+  }
+  return items;
+}
+
+function isJsonValue(value: unknown): value is JsonValue {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') {
+    return true;
+  }
+  if (typeof value === 'number') {
+    return Number.isFinite(value);
+  }
+  if (Array.isArray(value)) {
+    return value.every(isJsonValue);
+  }
+  if (isRecord(value)) {
+    return Object.values(value).every(isJsonValue);
+  }
+  return false;
 }
 
 function readStopReason(value: unknown): string {

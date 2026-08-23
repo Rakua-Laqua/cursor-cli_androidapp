@@ -85,6 +85,12 @@ class FoundationTest {
             assertNull(state.diffError)
             assertTrue(state.expandedDiffPaths.isEmpty())
             assertNull(state.fileViewer)
+            assertTrue(state.modelCatalog.isEmpty())
+            assertNull(state.currentModelId)
+            assertNull(state.pendingModelId)
+            assertNull(state.modelError)
+            assertFalse(state.modelsLoading)
+            assertFalse(state.modelPickerVisible)
         }
     }
 
@@ -148,6 +154,99 @@ class FoundationTest {
                 assertEquals("sess-new", viewModel.uiState.value.selectedSessionId)
                 assertTrue(viewModel.resumeSession("sess-1"))
                 assertEquals("sess-1", viewModel.uiState.value.selectedSessionId)
+            }
+        }
+    }
+
+    @Test
+    fun modelCatalogRefreshSelectPendingEventsAndFixtureExtraWithoutProductionIds() {
+        withViewModel { viewModel, dao, transport ->
+            runBlocking {
+                dao.upsert(pairedMachine())
+                assertTrue(viewModel.connectExistingMachine("pc-1"))
+                assertTrue(viewModel.openWorkspace("ws-1"))
+                assertTrue(viewModel.createSession())
+                val created = viewModel.uiState.value
+                assertEquals("sess-new", created.selectedSessionId)
+                assertEquals(listOf("mock-model", "mock-fast", "fixture-added-model", "unavailable-mock"), created.modelCatalog.map { it.id })
+                assertEquals("mock-model", created.currentModelId)
+                assertNull(created.pendingModelId)
+                assertEquals("Mock", created.modelCatalog.first { it.id == created.currentModelId }.displayName)
+                assertEquals(false, created.modelCatalog.any { it.id.contains("gpt") })
+                assertTrue(lastCommand(transport, "model.list").contains("\"sessionId\":\"sess-new\""))
+
+                assertTrue(viewModel.resumeSession("sess-1"))
+                val resumed = viewModel.uiState.value
+                assertEquals("sess-1", resumed.selectedSessionId)
+                assertEquals("mock-model", resumed.currentModelId)
+                assertTrue(resumed.modelCatalog.any { it.id == "fixture-added-model" })
+
+                viewModel.refreshModels()
+                assertEquals(2, transport.sent.count { commandType(it) == "model.list" && it.contains("\"sessionId\":\"sess-1\"") })
+
+                viewModel.selectModel("unavailable-mock")
+                assertEquals("mock-model", viewModel.uiState.value.currentModelId)
+                assertNull(viewModel.uiState.value.pendingModelId)
+                assertEquals(0, transport.sent.count { commandType(it) == "model.select" })
+
+                viewModel.selectModel("fixture-added-model")
+                val selected = viewModel.uiState.value
+                assertEquals("fixture-added-model", selected.currentModelId)
+                assertNull(selected.pendingModelId)
+                assertNull(selected.modelError)
+                assertTrue(lastCommand(transport, "model.select").contains("\"modelId\":\"fixture-added-model\""))
+                assertEquals("model.select", commandType(transport.sent.last()))
+                assertEquals(2, transport.sent.count { commandType(it) == "model.list" && it.contains("\"sessionId\":\"sess-1\"") })
+
+                transport.onSend = { text ->
+                    if (commandType(text) == "model.select") {
+                        transport.emit(resultJson(requestIdOf(text), ok = false, value = "null", error = "Unknown or unavailable model"))
+                    } else {
+                        transport.emit(successBody(requestIdOf(text), text))
+                    }
+                }
+                viewModel.selectModel("mock-fast")
+                val failed = viewModel.uiState.value
+                assertEquals("fixture-added-model", failed.currentModelId)
+                assertNull(failed.pendingModelId)
+                assertEquals("Unknown or unavailable model", failed.modelError)
+
+                transport.emit(eventJson("model.catalog_updated", "other", catalogJson(currentModelId = "mock-fast"), eventId = "evt-other-model"))
+                assertEquals("fixture-added-model", viewModel.uiState.value.currentModelId)
+                transport.emit(
+                    eventJson(
+                        "model.catalog_updated",
+                        "sess-1",
+                        catalogJson(
+                            currentModelId = "mock-fast",
+                            extraModelJson = """{"id":"fixture-extra-model","displayName":"Fixture Extra","description":null,"parameters":[],"variants":[],"available":true}""",
+                        ),
+                        eventId = "evt-catalog",
+                    ),
+                )
+                val catalogEvent = viewModel.uiState.value
+                assertEquals("mock-fast", catalogEvent.currentModelId)
+                assertTrue(catalogEvent.modelCatalog.any { it.id == "fixture-extra-model" })
+                transport.emit(
+                    eventJson(
+                        "model.selection_changed",
+                        "sess-1",
+                        """{"modelId":"fixture-added-model","confirmed":true}""",
+                        eventId = "evt-select",
+                    ),
+                )
+                assertEquals("fixture-added-model", viewModel.uiState.value.currentModelId)
+
+                hangModelList(transport)
+                viewModel.refreshModels()
+                val hung = lastCommand(transport, "model.list")
+                assertTrue(viewModel.uiState.value.modelsLoading)
+                viewModel.selectSession("sess-2")
+                assertTrue(viewModel.uiState.value.modelCatalog.isEmpty())
+                assertNull(viewModel.uiState.value.currentModelId)
+                transport.emit(resultJson(requestIdOf(hung), ok = true, value = catalogJson(currentModelId = "mock-model")))
+                assertTrue(viewModel.uiState.value.modelCatalog.isEmpty())
+                assertNull(viewModel.uiState.value.currentModelId)
             }
         }
     }
@@ -749,6 +848,13 @@ internal fun successBody(
                                 .getValue("payload").jsonObject.getValue("path").jsonPrimitive.content
                         """{"path":"$path","content":"file-body","truncated":false}"""
                     }
+                    "model.list" -> catalogJson()
+                    "model.select" -> {
+                        val modelId =
+                            Json.parseToJsonElement(text).jsonObject.getValue("command").jsonObject
+                                .getValue("payload").jsonObject.getValue("modelId").jsonPrimitive.content
+                        catalogJson(currentModelId = modelId)
+                    }
                     else -> "null"
                 }
             else -> "null"
@@ -772,6 +878,15 @@ internal fun snapshotJson(
 ): String =
     """{"workspaceId":"$workspaceId","available":true,"source":"git","files":[],"truncated":false,"omittedCount":0,"totalAdditions":$additions,"totalDeletions":0}"""
 
+internal fun catalogJson(
+    currentModelId: String? = "mock-model",
+    extraModelJson: String? = null,
+): String {
+    val current = if (currentModelId == null) "null" else "\"$currentModelId\""
+    val extra = extraModelJson?.let { ",$it" } ?: ""
+    return """{"models":[{"id":"mock-model","displayName":"Mock","description":null,"parameters":[],"variants":[],"available":true},{"id":"mock-fast","displayName":"Mock Fast","description":"Faster mock","parameters":[],"variants":[],"available":true},{"id":"fixture-added-model","displayName":"fixture-added-model","description":null,"parameters":[],"variants":[],"available":true},{"id":"unavailable-mock","displayName":"Unavailable Mock","description":null,"parameters":[],"variants":[],"available":false}$extra],"currentModelId":$current}"""
+}
+
 internal fun lastCommand(
     transport: FakeTransport,
     type: String,
@@ -780,6 +895,14 @@ internal fun lastCommand(
 internal fun hangDiffRead(transport: FakeTransport) {
     transport.onSend = { text ->
         if (commandType(text) != "diff.read") {
+            transport.emit(successBody(requestIdOf(text), text))
+        }
+    }
+}
+
+internal fun hangModelList(transport: FakeTransport) {
+    transport.onSend = { text ->
+        if (commandType(text) != "model.list") {
             transport.emit(successBody(requestIdOf(text), text))
         }
     }

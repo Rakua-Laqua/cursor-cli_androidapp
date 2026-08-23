@@ -578,3 +578,83 @@ test('idle and completed sessions fail closed instead of waiting for permission'
     assert.equal(events.filter((event) => event.type === 'permission.requested').length, 0);
   });
 });
+
+function modelCommand(type, sessionId, payload = {}, requestId = `req-${type}`) {
+  return parseRemoteCommand(
+    serializeCommand({
+      requestId,
+      sessionId,
+      timestamp: new Date().toISOString(),
+      type,
+      payload,
+    }),
+  );
+}
+
+test('model.list exposes fixture catalog without production model ids and select confirms a catalog model', async () => {
+  const workspacePath = makeWorkspace();
+  await withDaemon(async (daemon) => {
+    const events = collectEvents(daemon);
+    const { created } = await createIdleSession(daemon, workspacePath);
+    const listed = await daemon.sessions.handleCommand(
+      modelCommand('model.list', created.remoteSessionId),
+    );
+    const ids = listed.models.map((model) => model.id);
+    assert.deepEqual(ids.includes('mock-model'), true);
+    assert.deepEqual(ids.includes('mock-fast'), true);
+    assert.deepEqual(ids.includes('fixture-added-model'), true);
+    assert.equal(
+      listed.models.find((model) => model.id === 'fixture-added-model')?.displayName,
+      'fixture-added-model',
+    );
+    assert.equal(listed.currentModelId, 'mock-model');
+    assert.ok(events.some((event) => event.type === 'model.catalog_updated'));
+
+    const selected = await daemon.sessions.handleCommand(
+      modelCommand('model.select', created.remoteSessionId, { modelId: 'fixture-added-model' }),
+    );
+    assert.equal(selected.currentModelId, 'fixture-added-model');
+    const confirmed = events.filter((event) => event.type === 'model.selection_changed').at(-1);
+    assert.equal(confirmed.payload.modelId, 'fixture-added-model');
+    assert.equal(confirmed.payload.confirmed, true);
+    const afterSelect = await daemon.sessions.handleCommand(
+      modelCommand('model.list', created.remoteSessionId, {}, 'req-model-list-2'),
+    );
+    assert.equal(afterSelect.currentModelId, 'fixture-added-model');
+    assert.deepEqual(
+      afterSelect.models.map((model) => model.id).includes('fixture-added-model'),
+      true,
+    );
+
+    await assert.rejects(
+      () =>
+        daemon.sessions.handleCommand(
+          modelCommand('model.select', created.remoteSessionId, { modelId: 'missing-model' }),
+        ),
+      /Unknown or unavailable model/,
+    );
+  });
+});
+
+test('model.select is rejected while a prompt is in progress', async () => {
+  const workspacePath = makeWorkspace();
+  await withDaemon(async (daemon) => {
+    const events = collectEvents(daemon);
+    const { created } = await createIdleSession(daemon, workspacePath);
+    const sending = daemon.sessions.send(created.remoteSessionId, 'DELAY');
+    await waitUntil(() =>
+      events.some(
+        (event) => event.type === 'assistant.status' && event.payload.status === 'thinking',
+      ),
+    );
+    await assert.rejects(
+      () =>
+        daemon.sessions.handleCommand(
+          modelCommand('model.select', created.remoteSessionId, { modelId: 'mock-fast' }),
+        ),
+      /prompt in progress/,
+    );
+    await daemon.sessions.cancel(created.remoteSessionId);
+    await sending;
+  });
+});

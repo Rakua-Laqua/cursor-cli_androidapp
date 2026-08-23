@@ -602,7 +602,7 @@ long agent.waiting
 
 ### 実施記録
 
-2026-08-22、v1.11.0 で実装。in-process 限定。SM-S928Q Android 16 で受け入れ。次は TASK-400。詳細は `docs/implementation_status.md`。
+2026-08-22、v1.11.0 で実装。in-process 限定。SM-S928Q Android 16 で受け入れ。TASK-400 は v1.12.0。詳細は `docs/implementation_status.md`。
 
 ---
 
@@ -629,6 +629,10 @@ long agent.waiting
 - Model Picker表示。
 - 新モデル追加がアプリ更新なしで反映可能。
 - Sessionモデル変更が可能。
+
+### 実施記録
+
+2026-08-23、v1.12.0 で実装。ACP `session/new` / `session/load` の models / configOptions を防御的に変換し、Android Chat header の Model Picker から available モデルを選ぶ。モデル ID / 名前のハードコードなし。Model Visibility は TASK-401、Context / Usage は TASK-402 以降。実機検証は未実施。詳細は `CHANGELOG.md` と `docs/implementation_status.md`。
 
 ---
 

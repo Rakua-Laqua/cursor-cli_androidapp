@@ -7,6 +7,8 @@ import dev.cursorremote.android.data.local.MachineEntity
 import dev.cursorremote.android.data.protocol.ChatEvent
 import dev.cursorremote.android.data.protocol.DiffSnapshot
 import dev.cursorremote.android.data.protocol.FileContent
+import dev.cursorremote.android.data.protocol.ModelCatalog
+import dev.cursorremote.android.data.protocol.ModelCatalogEntry
 import dev.cursorremote.android.data.protocol.ProtocolParseError
 import dev.cursorremote.android.data.protocol.RemoteEvent
 import dev.cursorremote.android.data.protocol.RemoteProtocol
@@ -76,6 +78,12 @@ data class CursorRemoteUiState(
     val diffError: String? = null,
     val expandedDiffPaths: Set<String> = emptySet(),
     val fileViewer: FileViewerState? = null,
+    val modelCatalog: List<ModelCatalogEntry> = emptyList(),
+    val currentModelId: String? = null,
+    val pendingModelId: String? = null,
+    val modelError: String? = null,
+    val modelsLoading: Boolean = false,
+    val modelPickerVisible: Boolean = false,
 )
 
 class CursorRemoteViewModel(
@@ -91,6 +99,7 @@ class CursorRemoteViewModel(
     private val chatEpoch = AtomicLong(0)
     private val diffEpoch = AtomicLong(0)
     private val fileEpoch = AtomicLong(0)
+    private val modelEpoch = AtomicLong(0)
     val uiState: StateFlow<CursorRemoteUiState> = _uiState.asStateFlow()
     val connectionState: StateFlow<ConnectionState> = remoteRepository.socketConnectionState
 
@@ -109,6 +118,7 @@ class CursorRemoteViewModel(
             remoteRepository.events.collect { event ->
                 applyChatEvent(event)
                 applyDiffEvent(event)
+                applyModelEvent(event)
             }
         }
     }
@@ -117,8 +127,9 @@ class CursorRemoteViewModel(
         invalidateChat()
         invalidateDiff()
         invalidateFileViewer()
+        invalidateModels()
         _uiState.update {
-            it.withClearedChat().withClearedDiff().withClearedFileViewer().copy(
+            it.withClearedChat().withClearedDiff().withClearedFileViewer().withClearedModels().copy(
                 selectedMachineId = machineId,
                 selectedWorkspaceId = null,
                 selectedSessionId = null,
@@ -132,8 +143,9 @@ class CursorRemoteViewModel(
         invalidateChat()
         invalidateDiff()
         invalidateFileViewer()
+        invalidateModels()
         _uiState.update {
-            it.withClearedChat().withClearedDiff().withClearedFileViewer().copy(
+            it.withClearedChat().withClearedDiff().withClearedFileViewer().withClearedModels().copy(
                 selectedWorkspaceId = workspaceId,
                 selectedSessionId = null,
                 sessions = emptyList(),
@@ -144,7 +156,10 @@ class CursorRemoteViewModel(
     fun selectSession(sessionId: String?) {
         invalidateChat()
         invalidateFileViewer()
-        _uiState.update { it.withClearedChat().withClearedFileViewer().copy(selectedSessionId = sessionId) }
+        invalidateModels()
+        _uiState.update {
+            it.withClearedChat().withClearedFileViewer().withClearedModels().copy(selectedSessionId = sessionId)
+        }
     }
 
     fun sendPrompt(text: String) {
@@ -221,6 +236,47 @@ class CursorRemoteViewModel(
                 finishDiff(workspaceId, epoch, error.message ?: "Failed to read diff")
             }
         }
+    }
+
+    fun refreshModels() {
+        val sessionId = _uiState.value.selectedSessionId ?: return
+        if (_uiState.value.modelsLoading) return
+        val epoch = modelEpoch.get()
+        _uiState.update { it.copy(modelsLoading = true, modelError = null) }
+        scope.launch {
+            try {
+                applyModelCatalog(remoteRepository.listModels(sessionId), sessionId, epoch)
+            } catch (error: CancellationException) {
+                finishModels(sessionId, epoch, errorMessage = null)
+                throw error
+            } catch (error: Exception) {
+                finishModels(sessionId, epoch, error.message ?: "Failed to list models")
+            }
+        }
+    }
+
+    fun selectModel(modelId: String) {
+        val sessionId = _uiState.value.selectedSessionId ?: return
+        val available = _uiState.value.modelCatalog.any { it.id == modelId && it.available }
+        if (!available || _uiState.value.pendingModelId != null || _uiState.value.modelsLoading) {
+            return
+        }
+        val epoch = modelEpoch.get()
+        _uiState.update { it.copy(pendingModelId = modelId, modelError = null) }
+        scope.launch {
+            try {
+                applyModelCatalog(remoteRepository.selectModel(sessionId, modelId), sessionId, epoch, closePicker = true)
+            } catch (error: CancellationException) {
+                finishModels(sessionId, epoch, errorMessage = null, clearPending = true)
+                throw error
+            } catch (error: Exception) {
+                finishModels(sessionId, epoch, error.message ?: "Failed to select model", clearPending = true)
+            }
+        }
+    }
+
+    fun toggleModelPicker() {
+        _uiState.update { it.copy(modelPickerVisible = !it.modelPickerVisible) }
     }
 
     fun toggleDiffFile(path: String) {
@@ -317,6 +373,7 @@ class CursorRemoteViewModel(
         return runAction("Failed to create session") {
             selectSession(remoteRepository.createSession(workspaceId).remoteSessionId)
             _uiState.update { it.copy(isLoading = false, errorMessage = null) }
+            refreshModels()
         }
     }
 
@@ -324,11 +381,98 @@ class CursorRemoteViewModel(
         runAction("Failed to resume session") {
             selectSession(remoteRepository.loadSession(sessionId).remoteSessionId)
             _uiState.update { it.copy(isLoading = false, errorMessage = null) }
+            refreshModels()
         }
 
     override fun onCleared() {
         remoteRepository.disconnect()
         super.onCleared()
+    }
+
+    private fun applyModelEvent(event: RemoteEvent) {
+        val selectedSessionId = _uiState.value.selectedSessionId ?: return
+        if (event.sessionId != selectedSessionId) {
+            return
+        }
+        when (event.type) {
+            "model.catalog_updated" -> {
+                val catalog =
+                    try {
+                        RemoteProtocol.parseModelCatalog(event.payload)
+                    } catch (_: ProtocolParseError) {
+                        return
+                    }
+                applyModelCatalog(catalog, selectedSessionId, modelEpoch.get())
+            }
+            "model.selection_changed" -> {
+                val selection =
+                    try {
+                        RemoteProtocol.parseModelSelectionChanged(event.payload)
+                    } catch (_: ProtocolParseError) {
+                        return
+                    }
+                _uiState.update { state ->
+                    if (state.selectedSessionId != selectedSessionId) {
+                        state
+                    } else if (selection.confirmed) {
+                        state.copy(
+                            currentModelId = selection.modelId,
+                            pendingModelId =
+                                if (state.pendingModelId == selection.modelId) null else state.pendingModelId,
+                            modelError = null,
+                        )
+                    } else {
+                        state
+                    }
+                }
+            }
+        }
+    }
+
+    private fun applyModelCatalog(
+        catalog: ModelCatalog,
+        sessionId: String,
+        epoch: Long,
+        closePicker: Boolean = false,
+    ) {
+        _uiState.update { state ->
+            if (modelEpoch.get() != epoch || state.selectedSessionId != sessionId) {
+                state
+            } else {
+                state.copy(
+                    modelsLoading = false,
+                    modelError = null,
+                    modelCatalog = catalog.models,
+                    currentModelId = catalog.currentModelId,
+                    pendingModelId =
+                        if (catalog.currentModelId != null && catalog.currentModelId == state.pendingModelId) {
+                            null
+                        } else {
+                            state.pendingModelId
+                        },
+                    modelPickerVisible = if (closePicker) false else state.modelPickerVisible,
+                )
+            }
+        }
+    }
+
+    private fun finishModels(
+        sessionId: String,
+        epoch: Long,
+        errorMessage: String?,
+        clearPending: Boolean = false,
+    ) {
+        _uiState.update { state ->
+            if (modelEpoch.get() != epoch || state.selectedSessionId != sessionId) {
+                state
+            } else {
+                state.copy(
+                    modelsLoading = false,
+                    modelError = errorMessage ?: state.modelError,
+                    pendingModelId = if (clearPending) null else state.pendingModelId,
+                )
+            }
+        }
     }
 
     private fun applyDiffEvent(event: RemoteEvent) {
@@ -621,6 +765,10 @@ class CursorRemoteViewModel(
         fileEpoch.incrementAndGet()
     }
 
+    private fun invalidateModels() {
+        modelEpoch.incrementAndGet()
+    }
+
     private fun requestFile(
         sessionId: String,
         path: String,
@@ -729,3 +877,13 @@ private fun CursorRemoteUiState.withClearedDiff(): CursorRemoteUiState =
     )
 
 private fun CursorRemoteUiState.withClearedFileViewer(): CursorRemoteUiState = copy(fileViewer = null)
+
+private fun CursorRemoteUiState.withClearedModels(): CursorRemoteUiState =
+    copy(
+        modelCatalog = emptyList(),
+        currentModelId = null,
+        pendingModelId = null,
+        modelError = null,
+        modelsLoading = false,
+        modelPickerVisible = false,
+    )

@@ -204,6 +204,27 @@ class RemoteRepositoryTest {
         }
 
     @Test
+    fun modelListAndSelectSendSessionIdAndParseFixtureCatalog() =
+        withRepository { repo, transport ->
+            repo.authenticate("ws://127.0.0.1:8787", "pc-1", "device-1")
+            val listed = repo.listModels("sess-1")
+            assertEquals(listOf("mock-model", "mock-fast", "fixture-added-model", "unavailable-mock"), listed.models.map { it.id })
+            assertEquals("mock-model", listed.currentModelId)
+            assertEquals("fixture-added-model", listed.models.first { it.id == "fixture-added-model" }.displayName)
+            val listFrame = lastCommand(transport, "model.list")
+            assertTrue(listFrame.contains("\"type\":\"model.list\""))
+            assertTrue(listFrame.contains("\"sessionId\":\"sess-1\""))
+            assertEquals("{}", RemoteProtocol.modelListPayload().toString())
+            val selected = repo.selectModel("sess-1", "fixture-added-model")
+            assertEquals("fixture-added-model", selected.currentModelId)
+            val selectFrame = lastCommand(transport, "model.select")
+            assertTrue(selectFrame.contains("\"type\":\"model.select\""))
+            assertTrue(selectFrame.contains("\"sessionId\":\"sess-1\""))
+            assertTrue(selectFrame.contains("\"modelId\":\"fixture-added-model\""))
+            assertEquals("""{"modelId":"fixture-added-model"}""", RemoteProtocol.modelSelectPayload("fixture-added-model").toString())
+        }
+
+    @Test
     fun disconnectFailsInFlightSessionSend() =
         withRepository { repo, transport ->
             repo.authenticate("ws://127.0.0.1:8787", "pc-1", "device-1")

@@ -95,6 +95,9 @@ fun CursorRemoteApp(viewModel: CursorRemoteViewModel) {
                             onRefreshDiff = viewModel::refreshDiff,
                             onToggleDiffFile = viewModel::toggleDiffFile,
                             onOpenFile = { path, startLine, endLine -> viewModel.openFile(path, startLine, endLine) },
+                            onRefreshModels = viewModel::refreshModels,
+                            onSelectModel = viewModel::selectModel,
+                            onToggleModelPicker = viewModel::toggleModelPicker,
                         )
                     }
                 }
