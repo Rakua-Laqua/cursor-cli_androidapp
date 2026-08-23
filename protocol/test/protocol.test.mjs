@@ -413,3 +413,24 @@ test('model.list, model.select, catalog, and selection payloads roundtrip withou
   assert.equal(JSON.stringify(selectCommand.payload).includes('gpt'), false);
   assert.equal(JSON.stringify(catalog).includes('cursor-grok'), false);
 });
+
+test('session.context_updated payload roundtrips with used and size only', () => {
+  const event = {
+    eventId: 'evt_context',
+    sessionId: 'remote_sess_123',
+    timestamp: '2026-08-23T00:00:04+09:00',
+    type: 'session.context_updated',
+    payload: {
+      used: 12,
+      size: 100,
+    },
+  };
+
+  assert.deepEqual(parseRemoteEvent(serializeEvent(event)), event);
+  const eventFrame = parseRemoteFrame(serializeRemoteFrame({ kind: 'event', event }));
+  assert.equal(eventFrame.kind, 'event');
+  assert.deepEqual(eventFrame.event, event);
+  assert.deepEqual(event.payload, { used: 12, size: 100 });
+  assert.equal(JSON.stringify(event.payload).includes('cost'), false);
+  assert.equal(JSON.stringify(event).includes('session.context.get'), false);
+});

@@ -86,6 +86,15 @@ async function handlePrompt(id, params) {
     content: { type: 'text', text: 'thinking' },
   });
 
+  if (text === 'TASK-402') {
+    sendUpdate(sessionId, {
+      sessionUpdate: 'usage_update',
+      used: 1234,
+      size: 8000,
+      cost: { amount: 0.25, currency: 'USD' },
+    });
+  }
+
   if (text === 'ASK_PERMISSION') {
     const permission = await requestObservedPermission(sessionId);
     if (permission.cancelled || pendingCancels.has(sessionId)) {

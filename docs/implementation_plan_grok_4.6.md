@@ -684,6 +684,10 @@ Context 53K / 200K · 26%
 
 Prompt後にContext量が更新される。
 
+### 実施記録
+
+2026-08-23、v1.14.0 で実装。ACP structured `usage_update` の top-level used/size だけを remote `session.context_updated` にする。installed Cursor CLI では `usage_update` 未観測のため、valid event 受信まで UI 非表示。実機検証は未実施。次は TASK-403。詳細は `CHANGELOG.md` の 1.14.0。
+
 ---
 
 ## TASK-403: Context Breakdown

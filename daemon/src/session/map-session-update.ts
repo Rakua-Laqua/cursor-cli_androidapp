@@ -1,13 +1,15 @@
 import type {
   AssistantMessagePayload,
   AssistantStatusPayload,
+  SessionContextUpdatedPayload,
   UserMessagePayload,
 } from '@cursor-remote/protocol';
 
 export type MappedSessionEvent =
   | { readonly type: 'user.message'; readonly payload: UserMessagePayload }
   | { readonly type: 'assistant.message'; readonly payload: AssistantMessagePayload }
-  | { readonly type: 'assistant.status'; readonly payload: AssistantStatusPayload };
+  | { readonly type: 'assistant.status'; readonly payload: AssistantStatusPayload }
+  | { readonly type: 'session.context_updated'; readonly payload: SessionContextUpdatedPayload };
 
 export function mapAcpSessionUpdate(update: unknown): MappedSessionEvent[] {
   if (!isRecord(update)) {
@@ -33,6 +35,15 @@ export function mapAcpSessionUpdate(update: unknown): MappedSessionEvent[] {
 
   if (kind === 'agent_thought_chunk') {
     return [{ type: 'assistant.status', payload: { status: 'thinking' } }];
+  }
+
+  if (kind === 'usage_update') {
+    const used = readNonNegativeSafeInteger(update.used);
+    const size = readNonNegativeSafeInteger(update.size);
+    if (used === undefined || size === undefined) {
+      return [];
+    }
+    return [{ type: 'session.context_updated', payload: { used, size } }];
   }
 
   return [];
@@ -61,4 +72,11 @@ function readContentText(content: unknown): string | undefined {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function readNonNegativeSafeInteger(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    return undefined;
+  }
+  return value;
 }

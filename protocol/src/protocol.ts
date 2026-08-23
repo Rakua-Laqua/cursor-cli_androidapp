@@ -180,6 +180,11 @@ export interface ModelSelectCommandPayload extends JsonObject {
   readonly modelId: string;
 }
 
+export interface SessionContextUpdatedPayload extends JsonObject {
+  readonly used: number;
+  readonly size: number;
+}
+
 export interface KnownEventPayloads {
   readonly 'workspace.updated': WorkspaceUpdatedPayload;
   readonly 'model.catalog_updated': ModelCatalogPayload;
@@ -187,6 +192,7 @@ export interface KnownEventPayloads {
   readonly 'session.created': SessionPayload;
   readonly 'session.loaded': SessionPayload;
   readonly 'session.status_changed': SessionStatusChangedPayload;
+  readonly 'session.context_updated': SessionContextUpdatedPayload;
   readonly 'user.message': UserMessagePayload;
   readonly 'assistant.message': AssistantMessagePayload;
   readonly 'assistant.status': AssistantStatusPayload;

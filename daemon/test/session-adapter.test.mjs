@@ -658,3 +658,28 @@ test('model.select is rejected while a prompt is in progress', async () => {
     await sending;
   });
 });
+
+test('TASK-402 usage_update correlates to the remote session and omits cost', async () => {
+  const workspacePath = makeWorkspace();
+  await withDaemon(async (daemon) => {
+    const events = collectEvents(daemon);
+    const { registered, created } = await createIdleSession(daemon, workspacePath);
+    const other = await daemon.sessions.create({
+      workspaceId: registered.workspaceId,
+      initialPrompt: '',
+      title: null,
+    });
+    await daemon.sessions.send(created.remoteSessionId, 'TASK-402');
+    const updated = events.filter((event) => event.type === 'session.context_updated');
+    assert.equal(updated.length, 1);
+    assert.equal(updated[0].sessionId, created.remoteSessionId);
+    assert.equal(
+      updated.some((event) => event.sessionId === other.remoteSessionId),
+      false,
+    );
+    assert.deepEqual(updated[0].payload, { used: 1234, size: 8000 });
+    assert.equal(JSON.stringify(updated[0].payload).includes('cost'), false);
+    assert.equal(JSON.stringify(updated[0].payload).includes('amount'), false);
+    assert.equal(JSON.stringify(updated[0].payload).includes('currency'), false);
+  });
+});

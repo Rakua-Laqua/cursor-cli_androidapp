@@ -14,6 +14,7 @@ import dev.cursorremote.android.data.protocol.ModelCatalogEntry
 import dev.cursorremote.android.data.protocol.ProtocolParseError
 import dev.cursorremote.android.data.protocol.RemoteEvent
 import dev.cursorremote.android.data.protocol.RemoteProtocol
+import dev.cursorremote.android.data.protocol.SessionContextUsage
 import dev.cursorremote.android.data.protocol.SessionInfo
 import dev.cursorremote.android.data.protocol.WorkspaceInfo
 import dev.cursorremote.android.data.remote.RemoteConnectionState
@@ -88,6 +89,7 @@ data class CursorRemoteUiState(
     val modelPickerVisible: Boolean = false,
     val hiddenModelIds: Set<String> = emptySet(),
     val manageModelsVisible: Boolean = false,
+    val sessionContextUsage: SessionContextUsage? = null,
 ) {
     val pickerModels: List<ModelCatalogEntry>
         get() = modelCatalog.filter { it.available && it.id !in hiddenModelIds }
@@ -132,6 +134,7 @@ class CursorRemoteViewModel(
                 applyChatEvent(event)
                 applyDiffEvent(event)
                 applyModelEvent(event)
+                applySessionContextEvent(event)
             }
         }
     }
@@ -142,7 +145,7 @@ class CursorRemoteViewModel(
         invalidateFileViewer()
         invalidateModels()
         _uiState.update {
-            it.withClearedChat().withClearedDiff().withClearedFileViewer().withClearedModels().copy(
+            it.withClearedChat().withClearedDiff().withClearedFileViewer().withClearedModels().withClearedSessionContext().copy(
                 selectedMachineId = machineId,
                 selectedWorkspaceId = null,
                 selectedSessionId = null,
@@ -158,7 +161,7 @@ class CursorRemoteViewModel(
         invalidateFileViewer()
         invalidateModels()
         _uiState.update {
-            it.withClearedChat().withClearedDiff().withClearedFileViewer().withClearedModels().copy(
+            it.withClearedChat().withClearedDiff().withClearedFileViewer().withClearedModels().withClearedSessionContext().copy(
                 selectedWorkspaceId = workspaceId,
                 selectedSessionId = null,
                 sessions = emptyList(),
@@ -171,7 +174,7 @@ class CursorRemoteViewModel(
         invalidateFileViewer()
         invalidateModels()
         _uiState.update {
-            it.withClearedChat().withClearedFileViewer().withClearedModels().copy(selectedSessionId = sessionId)
+            it.withClearedChat().withClearedFileViewer().withClearedModels().withClearedSessionContext().copy(selectedSessionId = sessionId)
         }
     }
 
@@ -415,6 +418,32 @@ class CursorRemoteViewModel(
     override fun onCleared() {
         remoteRepository.disconnect()
         super.onCleared()
+    }
+
+    private fun applySessionContextEvent(event: RemoteEvent) {
+        if (event.type != "session.context_updated") {
+            return
+        }
+        val selectedSessionId = _uiState.value.selectedSessionId
+        if (selectedSessionId.isNullOrEmpty()) {
+            return
+        }
+        if (event.sessionId != selectedSessionId) {
+            return
+        }
+        val usage =
+            try {
+                RemoteProtocol.parseSessionContextUsage(event.payload)
+            } catch (_: ProtocolParseError) {
+                return
+            }
+        _uiState.update { state ->
+            if (state.selectedSessionId != selectedSessionId) {
+                state
+            } else {
+                state.copy(sessionContextUsage = usage)
+            }
+        }
     }
 
     private fun applyModelEvent(event: RemoteEvent) {
@@ -916,3 +945,5 @@ private fun CursorRemoteUiState.withClearedModels(): CursorRemoteUiState =
         modelPickerVisible = false,
         manageModelsVisible = false,
     )
+
+private fun CursorRemoteUiState.withClearedSessionContext(): CursorRemoteUiState = copy(sessionContextUsage = null)

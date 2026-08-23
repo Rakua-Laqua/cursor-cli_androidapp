@@ -74,6 +74,9 @@ fun ChatScreen(
     Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
         TextButton(onClick = onBack) { Text("Back") }
         Text("Chat", style = MaterialTheme.typography.headlineSmall)
+        uiState.sessionContextUsage?.let { usage ->
+            Text("${stringResource(R.string.context_usage_label)} ${formatSessionContextUsage(usage)}")
+        }
         StatusBlock(uiState)
         ModelPanel(
             uiState = uiState,

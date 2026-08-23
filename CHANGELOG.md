@@ -1,5 +1,22 @@
 # CHANGELOG
 
+## [1.14.0] - 2026-08-23
+
+### 追加
+
+- Session Context Usage。ACP v1 の structured `usage_update` は top-level `used` / `size` だけを見る。Daemon は `Number.isSafeInteger` かつ非負のときだけ remote `session.context_updated {used,size}` にする。`cost` / breakdown / account / extra fields は remote payload に出さない。malformed update は event を出さない。
+- Android は `used` / `size` を JSON integer Long（`0..9007199254740991`）として検証し、選択中の非空 session にだけメモリ保持する。machine / workspace / session 選択変更で clear。別 session、`sessionId` null、malformed、terminal event では既存値を消さない。Room 永続化なし。
+- valid event を受信したときだけ Chat header に Context を表示する。1000 未満は exact decimal、1000 以上は `floor(value/1000)K`。`size=0` は percent なし。`size>0` は overflow-safe な exact `floor(used*100/size)%`（clamp なし）。
+
+### 変更
+
+- パッケージ版 1.14.0、Android `versionCode` 27 / `versionName` 1.14.0。`session.context.get`、polling、text scraping、private API、model context size の推測は追加していない。Relay は generic のまま。設定変更と data migration は不要。値が無い既存環境の表示は変わらない。
+- installed Cursor CLI `2026.08.11-e8db854` の既存 capability 観測では `usage_update` は未観測。実運用 UI は valid event を受信するまで非表示。経路は test fixture の structured update で検証した。Context Breakdown は TASK-403、token/cost は TASK-404、Account Usage は TASK-405。
+
+### テスト
+
+- `npm test` は protocol 17 / daemon 118 / relay 8、fail 0。`npm run lint` pass。対象 TS/MJS Prettier pass。Gradle `:app:testDebugUnitTest :app:assembleDebug :app:lintDebug` BUILD SUCCESSFUL（53 tasks）。初回 Android unit test は Int/Long assertion mismatch 1 件で失敗し、Long 期待値へ修正後 60 tests pass。`git diff --check` pass。実機検証はユーザー方針により未実施。
+
 ## [1.13.0] - 2026-08-23
 
 ### 追加

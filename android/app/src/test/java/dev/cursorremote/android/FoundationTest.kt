@@ -369,6 +369,54 @@ class FoundationTest {
     }
 
     @Test
+    fun task402SessionContextUsageStoresForSelectedSessionUpdatesClearsAndSendsNoCommand() {
+        withViewModel { viewModel, dao, transport ->
+            runBlocking {
+                dao.upsert(pairedMachine())
+                assertTrue(viewModel.connectExistingMachine("pc-1"))
+                assertTrue(viewModel.openWorkspace("ws-1"))
+                assertTrue(viewModel.resumeSession("sess-1"))
+                assertNull(viewModel.uiState.value.sessionContextUsage)
+                transport.emit(eventJson("session.context_updated", "sess-1", """{"used":12,"size":100}"""))
+                assertEquals(12L, viewModel.uiState.value.sessionContextUsage?.used)
+                assertEquals(100L, viewModel.uiState.value.sessionContextUsage?.size)
+                transport.emit(eventJson("session.context_updated", "sess-1", """{"used":50,"size":200,"cost":1}"""))
+                assertEquals(50L, viewModel.uiState.value.sessionContextUsage?.used)
+                assertEquals(200L, viewModel.uiState.value.sessionContextUsage?.size)
+                transport.emit(eventJson("session.context_updated", "other", """{"used":1,"size":1}"""))
+                assertEquals(50L, viewModel.uiState.value.sessionContextUsage?.used)
+                assertEquals(200L, viewModel.uiState.value.sessionContextUsage?.size)
+                transport.emit(eventJson("session.context_updated", null, """{"used":2,"size":2}"""))
+                assertEquals(50L, viewModel.uiState.value.sessionContextUsage?.used)
+                assertEquals(200L, viewModel.uiState.value.sessionContextUsage?.size)
+                transport.emit(eventJson("session.context_updated", "sess-1", """{"used":"12","size":100}"""))
+                assertEquals(50L, viewModel.uiState.value.sessionContextUsage?.used)
+                assertEquals(200L, viewModel.uiState.value.sessionContextUsage?.size)
+                transport.emit(eventJson("agent.completed", "sess-1", """{"reason":null}""", eventId = "evt-context-term"))
+                assertEquals(50L, viewModel.uiState.value.sessionContextUsage?.used)
+                assertEquals(200L, viewModel.uiState.value.sessionContextUsage?.size)
+                assertEquals(0, transport.sent.count { commandType(it) == "session.context.get" })
+                viewModel.selectSession("sess-2")
+                assertNull(viewModel.uiState.value.sessionContextUsage)
+                viewModel.selectSession("sess-1")
+                transport.emit(eventJson("session.context_updated", "sess-1", """{"used":9,"size":10}"""))
+                assertEquals(9L, viewModel.uiState.value.sessionContextUsage?.used)
+                assertEquals(10L, viewModel.uiState.value.sessionContextUsage?.size)
+                viewModel.selectWorkspace("ws-2")
+                assertNull(viewModel.uiState.value.sessionContextUsage)
+                viewModel.selectWorkspace("ws-1")
+                viewModel.selectSession("sess-1")
+                transport.emit(eventJson("session.context_updated", "sess-1", """{"used":3,"size":4}"""))
+                assertEquals(3L, viewModel.uiState.value.sessionContextUsage?.used)
+                assertEquals(4L, viewModel.uiState.value.sessionContextUsage?.size)
+                viewModel.selectMachine("pc-2")
+                assertNull(viewModel.uiState.value.sessionContextUsage)
+                assertEquals(0, transport.sent.count { commandType(it) == "session.context.get" })
+            }
+        }
+    }
+
+    @Test
     fun listAndResumeFailuresStayOnCurrentSelection() {
         withViewModel(autoRespond = false) { viewModel, dao, transport ->
             runBlocking {

@@ -99,6 +99,11 @@ data class ModelSelectionChanged(
     val confirmed: Boolean,
 )
 
+data class SessionContextUsage(
+    val used: Long,
+    val size: Long,
+)
+
 data class RemoteCommandResult(val requestId: String, val ok: Boolean, val value: JsonElement?, val error: String?)
 
 data class RemoteEvent(
@@ -495,6 +500,19 @@ object RemoteProtocol {
         )
     }
 
+    fun parseSessionContextUsage(value: JsonElement): SessionContextUsage {
+        val root = parseObject(value, "session.context_updated")
+        val used = requireSafeInteger(root, "used")
+        val size = requireSafeInteger(root, "size")
+        if (used < 0) {
+            throw ProtocolParseError("used must be a non-negative integer.")
+        }
+        if (size < 0) {
+            throw ProtocolParseError("size must be a non-negative integer.")
+        }
+        return SessionContextUsage(used = used, size = size)
+    }
+
     fun parseChatEvent(event: RemoteEvent): ChatEvent? {
         if (event.type !in CHAT_EVENT_TYPES) {
             return null
@@ -681,6 +699,7 @@ object RemoteProtocol {
             "diff.updated" -> parseDiffSnapshot(payload)
             "model.catalog_updated" -> parseModelCatalog(payload)
             "model.selection_changed" -> parseModelSelectionChanged(payload)
+            "session.context_updated" -> parseSessionContextUsage(payload)
         }
         val event =
             RemoteEvent(

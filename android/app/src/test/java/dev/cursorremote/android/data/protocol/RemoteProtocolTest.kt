@@ -371,6 +371,51 @@ class RemoteProtocolTest {
         }
     }
 
+    @Test
+    fun sessionContextUsageParsesBoundsAndRejectsMalformedWithoutExactKeys() {
+        val extra = RemoteProtocol.parseSessionContextUsage(
+            kotlinx.serialization.json.Json.parseToJsonElement("""{"used":12,"size":100,"cost":1.5,"nested":{"tokens":1}}"""),
+        )
+        assertEquals(12L, extra.used)
+        assertEquals(100L, extra.size)
+        val zero = RemoteProtocol.parseSessionContextUsage(
+            kotlinx.serialization.json.Json.parseToJsonElement("""{"used":0,"size":0}"""),
+        )
+        assertEquals(0L, zero.used)
+        assertEquals(0L, zero.size)
+        val max = RemoteProtocol.parseSessionContextUsage(
+            kotlinx.serialization.json.Json.parseToJsonElement("""{"used":9007199254740991,"size":9007199254740991}"""),
+        )
+        assertEquals(RemoteProtocol.JS_MAX_SAFE_INTEGER, max.used)
+        assertEquals(RemoteProtocol.JS_MAX_SAFE_INTEGER, max.size)
+        val frame =
+            RemoteProtocol.parseIncomingFrame(
+                """{"kind":"event","event":{"eventId":"e-context","sessionId":"sess-1","timestamp":"t","type":"session.context_updated","payload":{"used":1,"size":2}}}""",
+            ) as IncomingRemoteFrame.Event
+        assertEquals("session.context_updated", frame.event.type)
+        assertEquals(1L, RemoteProtocol.parseSessionContextUsage(frame.event.payload).used)
+        assertSessionContextParseError("used") { """{"size":1}""" }
+        assertSessionContextParseError("size") { """{"used":1}""" }
+        assertSessionContextParseError("used") { """{"used":"1","size":1}""" }
+        assertSessionContextParseError("size") { """{"used":1,"size":"1"}""" }
+        assertSessionContextParseError("used") { """{"used":1.5,"size":1}""" }
+        assertSessionContextParseError("size") { """{"used":1,"size":1.5}""" }
+        assertSessionContextParseError("used") { """{"used":1e2,"size":1}""" }
+        assertSessionContextParseError("size") { """{"used":1,"size":1e2}""" }
+        assertSessionContextParseError("used") { """{"used":-1,"size":1}""" }
+        assertSessionContextParseError("size") { """{"used":1,"size":-1}""" }
+        assertSessionContextParseError("used") { """{"used":9007199254740992,"size":1}""" }
+        assertSessionContextParseError("size") { """{"used":1,"size":9007199254740992}""" }
+        try {
+            RemoteProtocol.parseIncomingFrame(
+                """{"kind":"event","event":{"eventId":"e-bad","sessionId":"sess-1","timestamp":"t","type":"session.context_updated","payload":{"used":"1","size":2}}}""",
+            )
+            fail("expected ProtocolParseError")
+        } catch (error: ProtocolParseError) {
+            assertTrue(error.message!!.contains("used"))
+        }
+    }
+
     private fun chatRemoteEvent(
         type: String,
         payload: String,
@@ -382,6 +427,18 @@ class RemoteProtocolTest {
                 """{"kind":"event","event":{"eventId":"e1","sessionId":$sessionJson,"timestamp":"t","type":"$type","payload":$payload}}""",
             ) as IncomingRemoteFrame.Event
         return frame.event
+    }
+
+    private fun assertSessionContextParseError(
+        messagePattern: String,
+        json: () -> String,
+    ) {
+        try {
+            RemoteProtocol.parseSessionContextUsage(kotlinx.serialization.json.Json.parseToJsonElement(json()))
+            fail("expected ProtocolParseError")
+        } catch (error: ProtocolParseError) {
+            assertTrue("message=${error.message}", Regex(messagePattern).containsMatchIn(error.message ?: ""))
+        }
     }
 
     private fun assertChatParseError(

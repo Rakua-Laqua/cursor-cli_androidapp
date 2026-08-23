@@ -12,4 +12,5 @@
     <string name="model_hidden">Hidden</string>
     <string name="model_hide">Hide</string>
     <string name="model_show">Show</string>
+    <string name="context_usage_label">Context</string>
 </resources>
