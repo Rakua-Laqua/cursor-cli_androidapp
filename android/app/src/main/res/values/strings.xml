@@ -6,4 +6,10 @@
     <string name="model_refresh">Refresh models</string>
     <string name="model_pending">Pending</string>
     <string name="model_select">Select model</string>
+    <string name="manage_models">Manage Models</string>
+    <string name="manage_models_close">Close</string>
+    <string name="model_visible">Visible</string>
+    <string name="model_hidden">Hidden</string>
+    <string name="model_hide">Hide</string>
+    <string name="model_show">Show</string>
 </resources>

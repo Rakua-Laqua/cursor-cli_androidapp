@@ -6,6 +6,7 @@ import androidx.lifecycle.ViewModelProvider
 import androidx.room.Room
 import dev.cursorremote.android.data.local.CursorRemoteDatabase
 import dev.cursorremote.android.data.local.MIGRATION_1_2
+import dev.cursorremote.android.data.local.MIGRATION_2_3
 import dev.cursorremote.android.data.remote.RemoteRepository
 import dev.cursorremote.android.data.security.AndroidKeystoreDeviceCredentialStore
 import dev.cursorremote.android.data.security.DeviceCredentialStore
@@ -30,7 +31,7 @@ class AppContainer(context: Context) {
             context.applicationContext,
             CursorRemoteDatabase::class.java,
             DATABASE_NAME,
-        ).addMigrations(MIGRATION_1_2).build()
+        ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build()
 
     val credentialStore: DeviceCredentialStore = AndroidKeystoreDeviceCredentialStore()
 
@@ -92,6 +93,7 @@ class CursorRemoteViewModelFactory(
         }
         return CursorRemoteViewModel(
             machineDao = database.machineDao(),
+            hiddenModelDao = database.hiddenModelDao(),
             remoteRepository = remoteRepository,
         ) as T
     }

@@ -98,6 +98,8 @@ fun CursorRemoteApp(viewModel: CursorRemoteViewModel) {
                             onRefreshModels = viewModel::refreshModels,
                             onSelectModel = viewModel::selectModel,
                             onToggleModelPicker = viewModel::toggleModelPicker,
+                            onToggleManageModels = viewModel::toggleManageModels,
+                            onSetModelHidden = viewModel::setModelHidden,
                         )
                     }
                 }

@@ -1,5 +1,7 @@
 package dev.cursorremote.android
 
+import dev.cursorremote.android.data.local.HiddenModelDao
+import dev.cursorremote.android.data.local.HiddenModelEntity
 import dev.cursorremote.android.data.local.MachineDao
 import dev.cursorremote.android.data.local.MachineEntity
 import dev.cursorremote.android.data.protocol.RemoteProtocol
@@ -91,6 +93,9 @@ class FoundationTest {
             assertNull(state.modelError)
             assertFalse(state.modelsLoading)
             assertFalse(state.modelPickerVisible)
+            assertTrue(state.hiddenModelIds.isEmpty())
+            assertFalse(state.manageModelsVisible)
+            assertTrue(state.pickerModels.isEmpty())
         }
     }
 
@@ -247,6 +252,118 @@ class FoundationTest {
                 transport.emit(resultJson(requestIdOf(hung), ok = true, value = catalogJson(currentModelId = "mock-model")))
                 assertTrue(viewModel.uiState.value.modelCatalog.isEmpty())
                 assertNull(viewModel.uiState.value.currentModelId)
+            }
+        }
+    }
+
+    @Test
+    fun modelVisibilityDefaultHideShowSelectedHeaderUnavailableSessionPersistWithoutRemoteCommand() {
+        val hiddenDao = FakeHiddenModelDao()
+        withViewModel(hiddenModelDao = hiddenDao) { viewModel, dao, transport ->
+            runBlocking {
+                dao.upsert(pairedMachine())
+                assertTrue(viewModel.connectExistingMachine("pc-1"))
+                assertTrue(viewModel.openWorkspace("ws-1"))
+                assertTrue(viewModel.createSession())
+                val created = viewModel.uiState.value
+                assertEquals(
+                    listOf("mock-model", "mock-fast", "fixture-added-model", "unavailable-mock"),
+                    created.modelCatalog.map { it.id },
+                )
+                assertEquals(
+                    listOf("mock-model", "mock-fast", "fixture-added-model"),
+                    created.pickerModels.map { it.id },
+                )
+                assertTrue(created.hiddenModelIds.isEmpty())
+                assertFalse(created.pickerModels.any { it.id == "unavailable-mock" })
+                assertTrue(created.modelCatalog.any { it.id == "unavailable-mock" && !it.available })
+
+                transport.emit(
+                    eventJson(
+                        "model.catalog_updated",
+                        "sess-new",
+                        catalogJson(
+                            currentModelId = "mock-model",
+                            extraModelJson = """{"id":"fixture-extra-model","displayName":"Fixture Extra","description":null,"parameters":[],"variants":[],"available":true}""",
+                        ),
+                        eventId = "evt-new-visible",
+                    ),
+                )
+                val detected = viewModel.uiState.value
+                assertTrue(detected.pickerModels.any { it.id == "fixture-extra-model" })
+                assertFalse("fixture-extra-model" in detected.hiddenModelIds)
+                assertTrue(detected.modelCatalog.any { it.id == "fixture-extra-model" })
+
+                val sentBeforeHide = transport.sent.size
+                viewModel.setModelHidden("mock-fast", true)
+                val hidden = viewModel.uiState.value
+                assertTrue("mock-fast" in hidden.hiddenModelIds)
+                assertEquals(
+                    listOf("mock-model", "fixture-added-model", "fixture-extra-model"),
+                    hidden.pickerModels.map { it.id },
+                )
+                assertTrue(hidden.modelCatalog.any { it.id == "mock-fast" })
+                assertEquals(sentBeforeHide, transport.sent.size)
+                assertEquals(0, transport.sent.count { commandType(it) == "model.visibility.update" })
+
+                viewModel.setModelHidden("mock-fast", false)
+                val shown = viewModel.uiState.value
+                assertFalse("mock-fast" in shown.hiddenModelIds)
+                assertEquals(
+                    listOf("mock-model", "mock-fast", "fixture-added-model", "fixture-extra-model"),
+                    shown.pickerModels.map { it.id },
+                )
+                assertEquals(sentBeforeHide, transport.sent.size)
+
+                viewModel.setModelHidden("mock-model", true)
+                val selectedHidden = viewModel.uiState.value
+                assertEquals("mock-model", selectedHidden.currentModelId)
+                assertEquals("Mock", selectedHidden.modelCatalog.first { it.id == selectedHidden.currentModelId }.displayName)
+                assertTrue("mock-model" in selectedHidden.hiddenModelIds)
+                assertFalse(selectedHidden.pickerModels.any { it.id == "mock-model" })
+                assertTrue(selectedHidden.modelCatalog.any { it.id == "mock-model" })
+
+                viewModel.toggleManageModels()
+                assertTrue(viewModel.uiState.value.manageModelsVisible)
+                viewModel.selectSession("sess-2")
+                val switched = viewModel.uiState.value
+                assertTrue(switched.modelCatalog.isEmpty())
+                assertNull(switched.currentModelId)
+                assertTrue("mock-model" in switched.hiddenModelIds)
+                assertFalse(switched.manageModelsVisible)
+                assertFalse(switched.modelPickerVisible)
+
+                assertTrue(viewModel.resumeSession("sess-1"))
+                val resumed = viewModel.uiState.value
+                assertTrue("mock-model" in resumed.hiddenModelIds)
+                assertEquals("mock-model", resumed.currentModelId)
+                assertEquals("Mock", resumed.modelCatalog.first { it.id == resumed.currentModelId }.displayName)
+                assertEquals(
+                    listOf("mock-fast", "fixture-added-model"),
+                    resumed.pickerModels.map { it.id },
+                )
+                assertTrue(resumed.modelCatalog.any { it.id == "unavailable-mock" })
+                assertFalse(resumed.pickerModels.any { it.id == "unavailable-mock" })
+                assertEquals(0, transport.sent.count { commandType(it) == "model.visibility.update" })
+            }
+        }
+        withViewModel(hiddenModelDao = hiddenDao) { viewModel, dao, transport ->
+            runBlocking {
+                dao.upsert(pairedMachine())
+                assertTrue(viewModel.connectExistingMachine("pc-1"))
+                assertTrue(viewModel.openWorkspace("ws-1"))
+                assertTrue(viewModel.createSession())
+                val persisted = viewModel.uiState.value
+                assertTrue("mock-model" in persisted.hiddenModelIds)
+                assertEquals("mock-model", persisted.currentModelId)
+                assertEquals("Mock", persisted.modelCatalog.first { it.id == persisted.currentModelId }.displayName)
+                assertFalse(persisted.pickerModels.any { it.id == "mock-model" })
+                assertTrue(persisted.modelCatalog.any { it.id == "mock-model" })
+                assertEquals(
+                    listOf("mock-fast", "fixture-added-model"),
+                    persisted.pickerModels.map { it.id },
+                )
+                assertEquals(0, transport.sent.count { commandType(it) == "model.visibility.update" })
             }
         }
     }
@@ -659,6 +776,7 @@ class FoundationTest {
 
     private fun withViewModel(
         autoRespond: Boolean = true,
+        hiddenModelDao: HiddenModelDao = FakeHiddenModelDao(),
         block: (CursorRemoteViewModel, FakeMachineDao, FakeTransport) -> Unit,
     ) {
         val job = SupervisorJob()
@@ -675,6 +793,7 @@ class FoundationTest {
         val viewModel =
             CursorRemoteViewModel(
                 machineDao = dao,
+                hiddenModelDao = hiddenModelDao,
                 remoteRepository = repository,
                 coroutineScope = scope,
                 nowMillis = { 1_699_000_000_000L },
@@ -722,6 +841,20 @@ internal class FakeMachineDao : MachineDao {
                     machine
                 }
             }
+    }
+}
+
+internal class FakeHiddenModelDao : HiddenModelDao {
+    val hidden = MutableStateFlow<List<String>>(emptyList())
+
+    override fun observeHiddenModelIds(): Flow<List<String>> = hidden
+
+    override suspend fun hide(entity: HiddenModelEntity) {
+        hidden.value = hidden.value.filter { it != entity.modelId } + entity.modelId
+    }
+
+    override suspend fun show(modelId: String) {
+        hidden.value = hidden.value.filter { it != modelId }
     }
 }
 

@@ -2,6 +2,8 @@ package dev.cursorremote.android.state
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import dev.cursorremote.android.data.local.HiddenModelDao
+import dev.cursorremote.android.data.local.HiddenModelEntity
 import dev.cursorremote.android.data.local.MachineDao
 import dev.cursorremote.android.data.local.MachineEntity
 import dev.cursorremote.android.data.protocol.ChatEvent
@@ -84,10 +86,16 @@ data class CursorRemoteUiState(
     val modelError: String? = null,
     val modelsLoading: Boolean = false,
     val modelPickerVisible: Boolean = false,
-)
+    val hiddenModelIds: Set<String> = emptySet(),
+    val manageModelsVisible: Boolean = false,
+) {
+    val pickerModels: List<ModelCatalogEntry>
+        get() = modelCatalog.filter { it.available && it.id !in hiddenModelIds }
+}
 
 class CursorRemoteViewModel(
     private val machineDao: MachineDao,
+    private val hiddenModelDao: HiddenModelDao,
     private val remoteRepository: RemoteRepository,
     coroutineScope: CoroutineScope? = null,
     private val nowMillis: () -> Long = { System.currentTimeMillis() },
@@ -107,6 +115,11 @@ class CursorRemoteViewModel(
         scope.launch {
             machineDao.observeMachines().collect { machines ->
                 _uiState.update { it.copy(machines = machines) }
+            }
+        }
+        scope.launch {
+            hiddenModelDao.observeHiddenModelIds().collect { hiddenIds ->
+                _uiState.update { it.copy(hiddenModelIds = hiddenIds.toSet()) }
             }
         }
         scope.launch {
@@ -277,6 +290,21 @@ class CursorRemoteViewModel(
 
     fun toggleModelPicker() {
         _uiState.update { it.copy(modelPickerVisible = !it.modelPickerVisible) }
+    }
+
+    fun toggleManageModels() {
+        _uiState.update { it.copy(manageModelsVisible = !it.manageModelsVisible) }
+    }
+
+    fun setModelHidden(modelId: String, hidden: Boolean) {
+        if (modelId.isEmpty()) return
+        scope.launch {
+            if (hidden) {
+                hiddenModelDao.hide(HiddenModelEntity(modelId))
+            } else {
+                hiddenModelDao.show(modelId)
+            }
+        }
     }
 
     fun toggleDiffFile(path: String) {
@@ -886,4 +914,5 @@ private fun CursorRemoteUiState.withClearedModels(): CursorRemoteUiState =
         modelError = null,
         modelsLoading = false,
         modelPickerVisible = false,
+        manageModelsVisible = false,
     )

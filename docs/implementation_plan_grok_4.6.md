@@ -632,7 +632,7 @@ long agent.waiting
 
 ### 実施記録
 
-2026-08-23、v1.12.0 で実装。ACP `session/new` / `session/load` の models / configOptions を防御的に変換し、Android Chat header の Model Picker から available モデルを選ぶ。モデル ID / 名前のハードコードなし。Model Visibility は TASK-401、Context / Usage は TASK-402 以降。実機検証は未実施。詳細は `CHANGELOG.md` と `docs/implementation_status.md`。
+2026-08-23、v1.12.0 で実装。ACP `session/new` / `session/load` の models / configOptions を防御的に変換し、Android Chat header の Model Picker から available モデルを選ぶ。モデル ID / 名前のハードコードなし。Model Visibility は v1.13.0。Context / Usage は TASK-402 以降。実機検証は未実施。詳細は `CHANGELOG.md` と `docs/implementation_status.md`。
 
 ---
 
@@ -654,6 +654,10 @@ hidden
 - hiddenモデルは通常Pickerから消える。
 - Manage Modelsでは再表示できる。
 - 選択中モデルはhiddenでもSession Headerへ表示する。
+
+### 実施記録
+
+2026-08-23、v1.13.0 で実装。Android ローカルの exact `modelId` 表示設定。通常 Picker から hidden を除外し、Manage Models から再表示できる。選択中 hidden は header に残す。実機検証は未実施。次は TASK-402。詳細は `CHANGELOG.md` と `docs/implementation_status.md`。
 
 ---
 

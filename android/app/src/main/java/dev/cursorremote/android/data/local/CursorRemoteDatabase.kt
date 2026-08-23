@@ -42,6 +42,23 @@ interface MachineDao {
     )
 }
 
+@Entity(tableName = "hidden_models")
+data class HiddenModelEntity(
+    @PrimaryKey val modelId: String,
+)
+
+@Dao
+interface HiddenModelDao {
+    @Query("SELECT modelId FROM hidden_models")
+    fun observeHiddenModelIds(): Flow<List<String>>
+
+    @Upsert
+    suspend fun hide(entity: HiddenModelEntity)
+
+    @Query("DELETE FROM hidden_models WHERE modelId = :modelId")
+    suspend fun show(modelId: String)
+}
+
 val MIGRATION_1_2 =
     object : Migration(1, 2) {
         override fun migrate(database: SupportSQLiteDatabase) {
@@ -51,11 +68,20 @@ val MIGRATION_1_2 =
         }
     }
 
+val MIGRATION_2_3 =
+    object : Migration(2, 3) {
+        override fun migrate(database: SupportSQLiteDatabase) {
+            database.execSQL("CREATE TABLE IF NOT EXISTS hidden_models (modelId TEXT NOT NULL PRIMARY KEY)")
+        }
+    }
+
 @Database(
-    entities = [MachineEntity::class],
-    version = 2,
+    entities = [MachineEntity::class, HiddenModelEntity::class],
+    version = 3,
     exportSchema = false,
 )
 abstract class CursorRemoteDatabase : RoomDatabase() {
     abstract fun machineDao(): MachineDao
+
+    abstract fun hiddenModelDao(): HiddenModelDao
 }

@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## [1.13.0] - 2026-08-23
+
+### 追加
+
+- Android ローカルの Model Visibility。キーは exact `modelId`。通常 Model Picker は available かつ hidden でない catalog だけを出す。Manage Models は取得済み catalog 全件（unavailable 含む）を高さ制限付きダイアログで縦スクロールし、Hide / Show できる。長い displayName でも操作ボタンは行内に残る。通常 Picker も高さ制限付きで縦スクロールする。選択中モデルを hidden にしても Session / Chat header の `displayName` / `currentModelId` は維持する。
+
+### 変更
+
+- パッケージ版 1.13.0、Android `versionCode` 26 / `versionName` 1.13.0。Room database v3 に `hidden_models(modelId PRIMARY KEY)` を追加し、非破壊 Migration 2→3。行なしは visible。新規検出 ID は、その exact ID が以前 hidden でなければ visible。hidden ID は catalog / session 切替とアプリ再起動後も残る。表示設定はアプリ内のみ。`model.visibility.update` を含む Remote command は送らない。Protocol / Daemon / Relay の公開挙動は変えない。Context / Usage は TASK-402、Account capability は TASK-405。
+
+### テスト
+
+- `npm test` は protocol 16 / daemon 114 / relay 8、fail 0。Gradle `:app:testDebugUnitTest :app:assembleDebug :app:lintDebug` BUILD SUCCESSFUL（53 tasks）。Room 生成コードを含む compile / lint は通過した。`git diff --check` pass。実機検証はユーザー方針により未実施。unit は FakeHiddenModelDao。実 Room データベースに対する Migration 2→3 の実行と close/reopen 永続化は未検証。
+
 ## [1.12.0] - 2026-08-23
 
 ### 追加

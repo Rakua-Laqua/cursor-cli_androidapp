@@ -14,6 +14,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -25,6 +26,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.LinkAnnotation
@@ -37,6 +39,7 @@ import androidx.compose.ui.text.withLink
 import androidx.compose.ui.unit.dp
 import dev.cursorremote.android.R
 import dev.cursorremote.android.data.protocol.DiffFileInfo
+import dev.cursorremote.android.data.protocol.ModelCatalogEntry
 import dev.cursorremote.android.state.ChatMessage
 import dev.cursorremote.android.state.ChatRole
 import dev.cursorremote.android.state.CursorRemoteUiState
@@ -56,6 +59,8 @@ fun ChatScreen(
     onRefreshModels: () -> Unit,
     onSelectModel: (modelId: String) -> Unit,
     onToggleModelPicker: () -> Unit,
+    onToggleManageModels: () -> Unit,
+    onSetModelHidden: (modelId: String, hidden: Boolean) -> Unit,
 ) {
     var draft by rememberSaveable { mutableStateOf("") }
     val listState = rememberLazyListState()
@@ -75,6 +80,8 @@ fun ChatScreen(
             onRefreshModels = onRefreshModels,
             onSelectModel = onSelectModel,
             onToggleModelPicker = onToggleModelPicker,
+            onToggleManageModels = onToggleManageModels,
+            onSetModelHidden = onSetModelHidden,
         )
         ChatStatusLabels(uiState)
         if (uiState.selectedWorkspaceId != null) {
@@ -123,12 +130,13 @@ private fun ModelPanel(
     onRefreshModels: () -> Unit,
     onSelectModel: (modelId: String) -> Unit,
     onToggleModelPicker: () -> Unit,
+    onToggleManageModels: () -> Unit,
+    onSetModelHidden: (modelId: String, hidden: Boolean) -> Unit,
 ) {
     val confirmedName =
         uiState.modelCatalog.firstOrNull { it.id == uiState.currentModelId }?.displayName
             ?: uiState.currentModelId
     val headerLabel = confirmedName ?: stringResource(R.string.model_unavailable)
-    val availableModels = uiState.modelCatalog.filter { it.available }
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text(
             text = headerLabel,
@@ -144,17 +152,97 @@ private fun ModelPanel(
             onClick = onRefreshModels,
             enabled = !uiState.modelsLoading && uiState.selectedSessionId != null,
         ) { Text(stringResource(R.string.model_refresh)) }
+        Button(
+            onClick = onToggleManageModels,
+            enabled = uiState.selectedSessionId != null,
+        ) { Text(stringResource(R.string.manage_models)) }
         if (uiState.modelPickerVisible) {
-            Text(stringResource(R.string.model_select), style = MaterialTheme.typography.titleSmall)
-            availableModels.forEach { model ->
-                val pending = uiState.pendingModelId != null || uiState.modelsLoading
-                TextButton(
-                    onClick = { onSelectModel(model.id) },
-                    enabled = !pending && model.id != uiState.currentModelId,
-                ) {
-                    Text(model.displayName)
+            ModelPickerList(uiState = uiState, onSelectModel = onSelectModel)
+        }
+        if (uiState.manageModelsVisible) {
+            ManageModelsDialog(
+                uiState = uiState,
+                onDismiss = onToggleManageModels,
+                onSetModelHidden = onSetModelHidden,
+            )
+        }
+    }
+}
+
+@Composable
+private fun ModelPickerList(
+    uiState: CursorRemoteUiState,
+    onSelectModel: (modelId: String) -> Unit,
+) {
+    Text(stringResource(R.string.model_select), style = MaterialTheme.typography.titleSmall)
+    Column(
+        Modifier.fillMaxWidth().heightIn(max = 280.dp).verticalScroll(rememberScrollState()),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        uiState.pickerModels.forEach { model ->
+            val pending = uiState.pendingModelId != null || uiState.modelsLoading
+            TextButton(
+                onClick = { onSelectModel(model.id) },
+                enabled = !pending && model.id != uiState.currentModelId,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(model.displayName, modifier = Modifier.fillMaxWidth())
+            }
+        }
+    }
+}
+
+@Composable
+private fun ManageModelsDialog(
+    uiState: CursorRemoteUiState,
+    onDismiss: () -> Unit,
+    onSetModelHidden: (modelId: String, hidden: Boolean) -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.manage_models)) },
+        text = {
+            Column(
+                Modifier.fillMaxWidth().heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                uiState.modelCatalog.forEach { model ->
+                    ManageModelRow(
+                        model = model,
+                        hidden = model.id in uiState.hiddenModelIds,
+                        onSetModelHidden = onSetModelHidden,
+                    )
                 }
             }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.manage_models_close)) }
+        },
+    )
+}
+
+@Composable
+private fun ManageModelRow(
+    model: ModelCatalogEntry,
+    hidden: Boolean,
+    onSetModelHidden: (modelId: String, hidden: Boolean) -> Unit,
+) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(model.displayName)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (!model.available) {
+                    Text(stringResource(R.string.model_unavailable))
+                }
+                Text(if (hidden) stringResource(R.string.model_hidden) else stringResource(R.string.model_visible))
+            }
+        }
+        TextButton(onClick = { onSetModelHidden(model.id, !hidden) }) {
+            Text(if (hidden) stringResource(R.string.model_show) else stringResource(R.string.model_hide))
         }
     }
 }
