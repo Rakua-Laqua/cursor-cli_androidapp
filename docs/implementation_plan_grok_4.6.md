@@ -738,6 +738,10 @@ cost
 
 ない値は`0`ではなく非表示。
 
+### 実施記録
+
+2026-08-24、v1.16.0 で実装し Phase 4 を完了。公式 ACP `usage_update.cost` のみを `session.usage_updated {cost}` へ分離。invalid / missing cost は非表示で valid context を抑止しない。token 内訳は公式 source が無いため実装しない。Android は選択 session の BigDecimal のみ保持し、切替で clear、terminal では保持。Usage は Context と独立。詳細は `CHANGELOG.md` と `docs/acp_capability_report.md`。
+
 ---
 
 ## TASK-405: Account Usage Capability
@@ -767,13 +771,17 @@ Cursor契約上の残量を正式に取得できる方法が存在するか確�
 
 この機能が取得不能でもMVP全体をBlockしない。
 
+### 実施記録
+
+2026-08-24、v1.16.0 で capability gate 完了。個人 Account Usage の公式安定 structured interface は無い。Dashboard scraping / private endpoint / `/usage` text parse / session cost 推測 / pool 合算は行わず、account command/event は dormant、gauge は非表示。Admin / Organization pooled usage API は別 credential と組織 semantics のため現 product scope 外。Phase 4 完了。次は Phase 5 TASK-500（実機必須、現状は未着手）。根拠は `docs/acp_capability_report.md`。
+
 ---
 
 # Phase 5 — Voice Input
 
 ## TASK-500: Android Audio Routing Spike
 
-音声認識より先に実施する。
+音声認識より先に実施する。実機の audio routing を確認する gate であり、ユーザー方針により実機検証できない現状では未着手。
 
 ### 確認する構成
 

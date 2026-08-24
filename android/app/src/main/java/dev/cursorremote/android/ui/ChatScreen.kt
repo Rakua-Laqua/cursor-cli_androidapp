@@ -40,6 +40,7 @@ import androidx.compose.ui.unit.dp
 import dev.cursorremote.android.R
 import dev.cursorremote.android.data.protocol.DiffFileInfo
 import dev.cursorremote.android.data.protocol.ModelCatalogEntry
+import dev.cursorremote.android.data.protocol.SessionUsage
 import dev.cursorremote.android.state.ChatMessage
 import dev.cursorremote.android.state.ChatRole
 import dev.cursorremote.android.state.CursorRemoteUiState
@@ -64,6 +65,7 @@ fun ChatScreen(
 ) {
     var draft by rememberSaveable { mutableStateOf("") }
     var contextExpanded by rememberSaveable { mutableStateOf(false) }
+    var usageDialogVisible by rememberSaveable(uiState.selectedSessionId) { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val lastMessage = uiState.chatMessages.lastOrNull()
     LaunchedEffect(uiState.chatMessages.size, lastMessage?.id, lastMessage?.text) {
@@ -94,6 +96,14 @@ fun ChatScreen(
                         }
                     }
                 }
+            }
+        }
+        uiState.sessionUsage?.let { usage ->
+            TextButton(onClick = { usageDialogVisible = true }) {
+                Text(stringResource(R.string.session_usage_button))
+            }
+            if (usageDialogVisible) {
+                SessionUsageDialog(usage = usage, onDismiss = { usageDialogVisible = false })
             }
         }
         StatusBlock(uiState)
@@ -433,6 +443,31 @@ private fun diffFileSummary(file: DiffFileInfo): String {
         file.previousPath?.let { add("from $it") }
     }
     return flags.joinToString("  ")
+}
+
+@Composable
+private fun SessionUsageDialog(
+    usage: SessionUsage,
+    onDismiss: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(stringResource(R.string.session_usage_title)) },
+        text = {
+            Column(
+                Modifier.fillMaxWidth().heightIn(max = 360.dp).verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Row(Modifier.fillMaxWidth()) {
+                    Text(stringResource(R.string.session_usage_cost), modifier = Modifier.weight(1f))
+                    Text("${usage.cost.currency} ${formatSessionCost(usage.cost.amount)}")
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onDismiss) { Text(stringResource(R.string.session_usage_close)) }
+        },
+    )
 }
 
 @Composable

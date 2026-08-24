@@ -17,6 +17,7 @@ import dev.cursorremote.android.data.protocol.RemoteProtocol
 import dev.cursorremote.android.data.protocol.SessionContextBreakdownCategory
 import dev.cursorremote.android.data.protocol.SessionContextUsage
 import dev.cursorremote.android.data.protocol.SessionInfo
+import dev.cursorremote.android.data.protocol.SessionUsage
 import dev.cursorremote.android.data.protocol.WorkspaceInfo
 import dev.cursorremote.android.data.remote.RemoteConnectionState
 import dev.cursorremote.android.data.remote.RemoteRepository
@@ -92,6 +93,7 @@ data class CursorRemoteUiState(
     val manageModelsVisible: Boolean = false,
     val sessionContextUsage: SessionContextUsage? = null,
     val sessionContextBreakdown: List<SessionContextBreakdownCategory>? = null,
+    val sessionUsage: SessionUsage? = null,
 ) {
     val pickerModels: List<ModelCatalogEntry>
         get() = modelCatalog.filter { it.available && it.id !in hiddenModelIds }
@@ -423,7 +425,11 @@ class CursorRemoteViewModel(
     }
 
     private fun applySessionContextEvent(event: RemoteEvent) {
-        if (event.type != "session.context_updated" && event.type != "session.context_breakdown_updated") {
+        if (
+            event.type != "session.context_updated" &&
+            event.type != "session.context_breakdown_updated" &&
+            event.type != "session.usage_updated"
+        ) {
             return
         }
         val selectedSessionId = _uiState.value.selectedSessionId
@@ -449,9 +455,25 @@ class CursorRemoteViewModel(
             }
             return
         }
-        val categories =
+        if (event.type == "session.context_breakdown_updated") {
+            val categories =
+                try {
+                    RemoteProtocol.parseSessionContextBreakdown(event.payload)
+                } catch (_: ProtocolParseError) {
+                    return
+                }
+            _uiState.update { state ->
+                if (state.selectedSessionId != selectedSessionId) {
+                    state
+                } else {
+                    state.copy(sessionContextBreakdown = categories)
+                }
+            }
+            return
+        }
+        val usage =
             try {
-                RemoteProtocol.parseSessionContextBreakdown(event.payload)
+                RemoteProtocol.parseSessionUsage(event.payload)
             } catch (_: ProtocolParseError) {
                 return
             }
@@ -459,7 +481,7 @@ class CursorRemoteViewModel(
             if (state.selectedSessionId != selectedSessionId) {
                 state
             } else {
-                state.copy(sessionContextBreakdown = categories)
+                state.copy(sessionUsage = usage)
             }
         }
     }
@@ -965,4 +987,8 @@ private fun CursorRemoteUiState.withClearedModels(): CursorRemoteUiState =
     )
 
 private fun CursorRemoteUiState.withClearedSessionContext(): CursorRemoteUiState =
-    copy(sessionContextUsage = null, sessionContextBreakdown = null)
+    copy(
+        sessionContextUsage = null,
+        sessionContextBreakdown = null,
+        sessionUsage = null,
+    )

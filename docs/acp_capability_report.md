@@ -1,7 +1,7 @@
 # Cursor ACP Capability Report
 
-- 文書バージョン: v0.1
-- 対象タスク: TASK-100
+- 文書バージョン: v0.2
+- 対象タスク: TASK-100 / TASK-404 / TASK-405
 - 実測日: 2026-08-17
 - 対象設計書: `docs/cursor_remote_android_spec_v0.3.md`
 - 実測方針: インストール済み Cursor CLI に対する JSON-RPC 実測のみを記録する。公式ドキュメントや設計書に書かれていても、この実行で観測しなかった機能は「存在する」とは扱わない。
@@ -318,3 +318,11 @@ probe は `reject-once` を返した。その後も turn は継続し、別 tool
 | 履歴 replay | load 後の `session/update` に、初回応答の `ACP_RESTART_LOAD_OK` も現れた。前回 chunk の再送があり得る。全履歴の完全再現は未確認 |
 
 この実行での `models.currentModelId` は `composer-2.5[fast=true]` だった。値はアカウントと CLI に依存する。実装はモデル ID をハードコードせず、`session/new` / `session/load` 応答の `models.currentModelId` を保存する。
+
+---
+
+## 14. TASK-404 / TASK-405 契約監査（2026-08-24）
+
+公式 ACP v1 の [`UsageUpdate`](https://raw.githubusercontent.com/agentclientprotocol/agent-client-protocol/main/schema/v1/schema.json) は `used` / `size` と optional な累積 `cost` のみ。`PromptResponse` は `stopReason` のみで、token 内訳と `state_update` は無い。Cursor の [ACP 拡張](https://cursor.com/docs/cli/acp) に個人 Account Usage の安定 structured interface は無い。個人向け案内は [Spending Dashboard](https://cursor.com/help/models-and-usage/usage-limits) であり、typed personal REST API は未確認。[CLI changelog](https://cursor.com/changelog/cli-jan-16-2026) も個人 usage REST を公開しない。[Team Admin API](https://cursor.com/docs/account/teams/admin-api) と [Organization pooled usage](https://cursor.com/docs/account/organizations/organization-admin-api#org-pooled-usage) は別 admin / org credentials と組織 semantics のため、現 product scope 外。
+
+probe（§3 / §7）では `usage_update` は未観測のまま。公式 schema 上の `used` / `size` / optional `cost` だけを TASK-402 / 404 が防御的に扱う。token 内訳は実装しない。TASK-405 は Dashboard scraping / private endpoint / `/usage` text parse / session cost 推測 / pool 合算を行わず dormant。installed CLI `2026.08.11-e8db854` でも `usage_update` 未観測。

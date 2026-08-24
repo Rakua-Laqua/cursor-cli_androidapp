@@ -13,4 +13,8 @@
     <string name="model_hide">Hide</string>
     <string name="model_show">Show</string>
     <string name="context_usage_label">Context</string>
+    <string name="session_usage_button">Usage</string>
+    <string name="session_usage_title">This session</string>
+    <string name="session_usage_cost">Cost</string>
+    <string name="session_usage_close">Close</string>
 </resources>

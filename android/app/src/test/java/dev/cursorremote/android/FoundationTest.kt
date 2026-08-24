@@ -14,6 +14,7 @@ import dev.cursorremote.android.data.transport.TransportMessageQueue
 import dev.cursorremote.android.data.transport.WebSocketTransport
 import dev.cursorremote.android.state.CursorRemoteViewModel
 import dev.cursorremote.android.ui.AppDestination
+import java.math.BigDecimal
 import java.security.KeyPair
 import java.security.KeyPairGenerator
 import java.security.PublicKey
@@ -494,6 +495,81 @@ class FoundationTest {
                 assertEquals("skills", viewModel.uiState.value.sessionContextBreakdown?.first()?.id)
                 viewModel.selectMachine("pc-2")
                 assertNull(viewModel.uiState.value.sessionContextBreakdown)
+            }
+        }
+    }
+
+    @Test
+    fun task404SessionUsageStoresForSelectedSessionIgnoresInvalidAndClearsOnSwitch() {
+        withViewModel { viewModel, dao, transport ->
+            runBlocking {
+                dao.upsert(pairedMachine())
+                assertTrue(viewModel.connectExistingMachine("pc-1"))
+                assertTrue(viewModel.openWorkspace("ws-1"))
+                assertTrue(viewModel.resumeSession("sess-1"))
+                assertNull(viewModel.uiState.value.sessionUsage)
+                transport.emit(
+                    eventJson(
+                        "session.usage_updated",
+                        "sess-1",
+                        """{"cost":{"amount":0.045,"currency":"USD"}}""",
+                    ),
+                )
+                assertEquals(BigDecimal("0.045"), viewModel.uiState.value.sessionUsage?.cost?.amount)
+                assertEquals("USD", viewModel.uiState.value.sessionUsage?.cost?.currency)
+                transport.emit(
+                    eventJson(
+                        "session.usage_updated",
+                        "other",
+                        """{"cost":{"amount":1,"currency":"USD"}}""",
+                    ),
+                )
+                assertEquals(BigDecimal("0.045"), viewModel.uiState.value.sessionUsage?.cost?.amount)
+                transport.emit(eventJson("session.usage_updated", null, """{"cost":{"amount":1,"currency":"USD"}}"""))
+                assertEquals(BigDecimal("0.045"), viewModel.uiState.value.sessionUsage?.cost?.amount)
+                transport.emit(
+                    eventJson(
+                        "session.usage_updated",
+                        "sess-1",
+                        """{"cost":{"amount":-1,"currency":"USD"}}""",
+                    ),
+                )
+                assertEquals(BigDecimal("0.045"), viewModel.uiState.value.sessionUsage?.cost?.amount)
+                transport.emit(
+                    eventJson(
+                        "session.usage_updated",
+                        "sess-1",
+                        """{"amount":0.25,"currency":"USD"}""",
+                    ),
+                )
+                assertEquals(BigDecimal("0.045"), viewModel.uiState.value.sessionUsage?.cost?.amount)
+                transport.emit(eventJson("agent.completed", "sess-1", """{"reason":null}""", eventId = "evt-usage-term"))
+                assertEquals(BigDecimal("0.045"), viewModel.uiState.value.sessionUsage?.cost?.amount)
+                viewModel.selectSession("sess-2")
+                assertNull(viewModel.uiState.value.sessionUsage)
+                viewModel.selectSession("sess-1")
+                transport.emit(
+                    eventJson(
+                        "session.usage_updated",
+                        "sess-1",
+                        """{"cost":{"amount":0,"currency":"USD"}}""",
+                    ),
+                )
+                assertEquals(BigDecimal("0"), viewModel.uiState.value.sessionUsage?.cost?.amount)
+                viewModel.selectWorkspace("ws-2")
+                assertNull(viewModel.uiState.value.sessionUsage)
+                viewModel.selectWorkspace("ws-1")
+                viewModel.selectSession("sess-1")
+                transport.emit(
+                    eventJson(
+                        "session.usage_updated",
+                        "sess-1",
+                        """{"cost":{"amount":0.25,"currency":"USD"}}""",
+                    ),
+                )
+                assertEquals(BigDecimal("0.25"), viewModel.uiState.value.sessionUsage?.cost?.amount)
+                viewModel.selectMachine("pc-2")
+                assertNull(viewModel.uiState.value.sessionUsage)
             }
         }
     }

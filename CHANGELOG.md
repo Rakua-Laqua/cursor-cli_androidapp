@@ -1,5 +1,22 @@
 # CHANGELOG
 
+## [1.16.0] - 2026-08-24
+
+### 追加
+
+- Session Cost。公式 ACP `usage_update.cost` だけを remote `session.usage_updated {cost}` へ分離する。`cost` が欠落または invalid なら Usage event は出さず、valid な `session.context_updated` は抑止しない。token 内訳は公式 source が無いため実装も推測もしない。
+- Android は選択中 session の cost だけを `BigDecimal` でメモリ保持する。machine / workspace / session 切替で clear し、terminal event では残す。Room 永続化なし。
+- Chat header は Context と独立した Usage ボタンを出す。valid cost があるときだけ表示し、bounded な This session dialog で ISO currency code と plain decimal のみを出す。通貨記号や Account 残量ゲージは出さない。
+
+### 変更
+
+- パッケージ版 1.16.0、Android `versionCode` 29 / `versionName` 1.16.0。TASK-405 は個人 Account Usage の公式安定 structured interface が無いため実装しない。Dashboard scraping、private endpoint、`/usage` テキスト parse、session cost からの推測、pool 合算は行わない。account command / event は dormant、ゲージは非表示。Team Admin / Organization pooled usage API は別 credential と組織 semantics のため現 product scope 外。Relay は generic のまま。設定変更と data migration は不要。
+- installed Cursor CLI `2026.08.11-e8db854` では `usage_update` 未観測のため、valid event を受けるまで Usage UI は非表示。契約根拠は `docs/acp_capability_report.md`。
+
+### テスト
+
+- `npm test` は protocol 19 / daemon 125 / relay 8、fail 0。`npm run lint` pass。targeted Prettier pass。Gradle `--no-daemon test assembleDebug lintDebug` BUILD SUCCESSFUL（78 actionable tasks、debug unit 66 tests、fail 0）。`git diff --check` pass。実機検証はユーザー方針により未実施。
+
 ## [1.15.0] - 2026-08-24
 
 ### 追加

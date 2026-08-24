@@ -681,5 +681,13 @@ test('TASK-402 usage_update correlates to the remote session and omits cost', as
     assert.equal(JSON.stringify(updated[0].payload).includes('cost'), false);
     assert.equal(JSON.stringify(updated[0].payload).includes('amount'), false);
     assert.equal(JSON.stringify(updated[0].payload).includes('currency'), false);
+    const usageUpdated = events.filter((event) => event.type === 'session.usage_updated');
+    assert.equal(usageUpdated.length, 1);
+    assert.equal(usageUpdated[0].sessionId, created.remoteSessionId);
+    assert.equal(
+      usageUpdated.some((event) => event.sessionId === other.remoteSessionId),
+      false,
+    );
+    assert.deepEqual(usageUpdated[0].payload, { cost: { amount: 0.25, currency: 'USD' } });
   });
 });

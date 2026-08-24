@@ -4,8 +4,12 @@ import type {
   SessionContextBreakdownCategoryPayload,
   SessionContextBreakdownUpdatedPayload,
   SessionContextUpdatedPayload,
+  SessionCostPayload,
+  SessionUsageUpdatedPayload,
   UserMessagePayload,
 } from '@cursor-remote/protocol';
+
+const CURRENCY_CODE = /^[A-Z]{3}$/;
 
 export type MappedSessionEvent =
   | { readonly type: 'user.message'; readonly payload: UserMessagePayload }
@@ -15,7 +19,8 @@ export type MappedSessionEvent =
   | {
       readonly type: 'session.context_breakdown_updated';
       readonly payload: SessionContextBreakdownUpdatedPayload;
-    };
+    }
+  | { readonly type: 'session.usage_updated'; readonly payload: SessionUsageUpdatedPayload };
 
 export function mapAcpSessionUpdate(update: unknown): MappedSessionEvent[] {
   if (!isRecord(update)) {
@@ -59,6 +64,10 @@ export function mapAcpSessionUpdate(update: unknown): MappedSessionEvent[] {
         payload: { categories },
       });
     }
+    const cost = readSessionCost(update.cost);
+    if (cost !== undefined) {
+      events.push({ type: 'session.usage_updated', payload: { cost } });
+    }
     return events;
   }
 
@@ -97,7 +106,9 @@ function readNonNegativeSafeInteger(value: unknown): number | undefined {
   return value;
 }
 
-function readContextBreakdown(value: unknown): SessionContextBreakdownCategoryPayload[] | undefined {
+function readContextBreakdown(
+  value: unknown,
+): SessionContextBreakdownCategoryPayload[] | undefined {
   if (!Array.isArray(value)) {
     return undefined;
   }
@@ -117,4 +128,19 @@ function readContextBreakdown(value: unknown): SessionContextBreakdownCategoryPa
     categories.push({ id: item.id, displayName, tokens });
   }
   return categories;
+}
+
+function readSessionCost(value: unknown): SessionCostPayload | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+  const amount = value.amount;
+  const currency = value.currency;
+  if (typeof amount !== 'number' || !Number.isFinite(amount) || amount < 0) {
+    return undefined;
+  }
+  if (typeof currency !== 'string' || !CURRENCY_CODE.test(currency)) {
+    return undefined;
+  }
+  return { amount, currency };
 }

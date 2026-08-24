@@ -231,3 +231,140 @@ test('usage_update without breakdown key stays context_updated only', () => {
     [{ type: 'session.context_updated', payload: { used: 10, size: 100 } }],
   );
 });
+
+test('usage_update with valid cost emits context then session.usage_updated', () => {
+  assert.deepEqual(
+    mapAcpSessionUpdate({
+      sessionUpdate: 'usage_update',
+      used: 10,
+      size: 100,
+      cost: { amount: 0.045, currency: 'USD' },
+    }),
+    [
+      { type: 'session.context_updated', payload: { used: 10, size: 100 } },
+      { type: 'session.usage_updated', payload: { cost: { amount: 0.045, currency: 'USD' } } },
+    ],
+  );
+  assert.deepEqual(
+    mapAcpSessionUpdate({
+      sessionUpdate: 'usage_update',
+      used: 10,
+      size: 100,
+      cost: { amount: 0, currency: 'USD' },
+    }),
+    [
+      { type: 'session.context_updated', payload: { used: 10, size: 100 } },
+      { type: 'session.usage_updated', payload: { cost: { amount: 0, currency: 'USD' } } },
+    ],
+  );
+});
+
+test('usage_update without cost or with invalid cost omits usage event only', () => {
+  const expected = [{ type: 'session.context_updated', payload: { used: 10, size: 100 } }];
+  assert.deepEqual(
+    mapAcpSessionUpdate({ sessionUpdate: 'usage_update', used: 10, size: 100 }),
+    expected,
+  );
+  assert.deepEqual(
+    mapAcpSessionUpdate({
+      sessionUpdate: 'usage_update',
+      used: 10,
+      size: 100,
+      cost: null,
+    }),
+    expected,
+  );
+  assert.deepEqual(
+    mapAcpSessionUpdate({
+      sessionUpdate: 'usage_update',
+      used: 10,
+      size: 100,
+      cost: { amount: -1, currency: 'USD' },
+    }),
+    expected,
+  );
+  assert.deepEqual(
+    mapAcpSessionUpdate({
+      sessionUpdate: 'usage_update',
+      used: 10,
+      size: 100,
+      cost: { amount: Number.NaN, currency: 'USD' },
+    }),
+    expected,
+  );
+  assert.deepEqual(
+    mapAcpSessionUpdate({
+      sessionUpdate: 'usage_update',
+      used: 10,
+      size: 100,
+      cost: { amount: Number.POSITIVE_INFINITY, currency: 'USD' },
+    }),
+    expected,
+  );
+  assert.deepEqual(
+    mapAcpSessionUpdate({
+      sessionUpdate: 'usage_update',
+      used: 10,
+      size: 100,
+      cost: { amount: Number.NEGATIVE_INFINITY, currency: 'USD' },
+    }),
+    expected,
+  );
+  assert.deepEqual(
+    mapAcpSessionUpdate({
+      sessionUpdate: 'usage_update',
+      used: 10,
+      size: 100,
+      cost: { amount: 1, currency: '' },
+    }),
+    expected,
+  );
+  assert.deepEqual(
+    mapAcpSessionUpdate({
+      sessionUpdate: 'usage_update',
+      used: 10,
+      size: 100,
+      cost: { amount: 1, currency: 'usd' },
+    }),
+    expected,
+  );
+  assert.deepEqual(
+    mapAcpSessionUpdate({
+      sessionUpdate: 'usage_update',
+      used: 10,
+      size: 100,
+      cost: { amount: 1, currency: 'US' },
+    }),
+    expected,
+  );
+  assert.deepEqual(
+    mapAcpSessionUpdate({
+      sessionUpdate: 'usage_update',
+      used: 10,
+      size: 100,
+      cost: { amount: 1, currency: 'USDT' },
+    }),
+    expected,
+  );
+});
+
+test('invalid used or size rejects the entire usage_update including valid cost', () => {
+  assert.deepEqual(
+    mapAcpSessionUpdate({
+      sessionUpdate: 'usage_update',
+      used: -1,
+      size: 100,
+      cost: { amount: 0.25, currency: 'USD' },
+    }),
+    [],
+  );
+  assert.deepEqual(
+    mapAcpSessionUpdate({
+      sessionUpdate: 'usage_update',
+      used: 10,
+      size: 1.5,
+      cost: { amount: 0.25, currency: 'USD' },
+    }),
+    [],
+  );
+});

@@ -12,6 +12,7 @@ export const EVENT_TYPES = [
   'session.status_changed',
   'session.context_updated',
   'session.context_breakdown_updated',
+  'session.usage_updated',
   'user.message',
   'assistant.message',
   'assistant.status',
@@ -195,6 +196,15 @@ export interface SessionContextBreakdownUpdatedPayload extends JsonObject {
   readonly categories: SessionContextBreakdownCategoryPayload[];
 }
 
+export interface SessionCostPayload extends JsonObject {
+  readonly amount: number;
+  readonly currency: string;
+}
+
+export interface SessionUsageUpdatedPayload extends JsonObject {
+  readonly cost: SessionCostPayload;
+}
+
 export interface KnownEventPayloads {
   readonly 'workspace.updated': WorkspaceUpdatedPayload;
   readonly 'model.catalog_updated': ModelCatalogPayload;
@@ -204,6 +214,7 @@ export interface KnownEventPayloads {
   readonly 'session.status_changed': SessionStatusChangedPayload;
   readonly 'session.context_updated': SessionContextUpdatedPayload;
   readonly 'session.context_breakdown_updated': SessionContextBreakdownUpdatedPayload;
+  readonly 'session.usage_updated': SessionUsageUpdatedPayload;
   readonly 'user.message': UserMessagePayload;
   readonly 'assistant.message': AssistantMessagePayload;
   readonly 'assistant.status': AssistantStatusPayload;

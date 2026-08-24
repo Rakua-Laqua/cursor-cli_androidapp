@@ -1,5 +1,6 @@
 package dev.cursorremote.android.data.protocol
 
+import java.math.BigDecimal
 import java.nio.charset.StandardCharsets
 import java.security.MessageDigest
 import org.junit.Assert.assertEquals
@@ -472,6 +473,92 @@ class RemoteProtocolTest {
             fail("expected ProtocolParseError")
         } catch (error: ProtocolParseError) {
             assertTrue(error.message!!.contains("id"))
+        }
+    }
+
+    @Test
+    fun sessionUsageParsesNestedCostAndRejectsMalformed() {
+        val parsed =
+            RemoteProtocol.parseSessionUsage(
+                kotlinx.serialization.json.Json.parseToJsonElement(
+                    """{"cost":{"amount":0.045,"currency":"USD"}}""",
+                ),
+            )
+        assertEquals(BigDecimal("0.045"), parsed.cost.amount)
+        assertEquals("0.045", parsed.cost.amount.toPlainString())
+        assertEquals("USD", parsed.cost.currency)
+        val precise =
+            RemoteProtocol.parseSessionUsage(
+                kotlinx.serialization.json.Json.parseToJsonElement(
+                    """{"cost":{"amount":0.123456789012345678,"currency":"USD"}}""",
+                ),
+            )
+        assertEquals("0.123456789012345678", precise.cost.amount.toPlainString())
+        val zero =
+            RemoteProtocol.parseSessionUsage(
+                kotlinx.serialization.json.Json.parseToJsonElement("""{"cost":{"amount":0,"currency":"USD"}}"""),
+            )
+        assertEquals(BigDecimal("0"), zero.cost.amount)
+        val scientific =
+            RemoteProtocol.parseSessionUsage(
+                kotlinx.serialization.json.Json.parseToJsonElement("""{"cost":{"amount":1e-2,"currency":"USD"}}"""),
+            )
+        assertEquals(BigDecimal("0.01"), scientific.cost.amount)
+        val scientificUpper =
+            RemoteProtocol.parseSessionUsage(
+                kotlinx.serialization.json.Json.parseToJsonElement("""{"cost":{"amount":1E-2,"currency":"USD"}}"""),
+            )
+        assertEquals(BigDecimal("0.01"), scientificUpper.cost.amount)
+        val negativeZero =
+            RemoteProtocol.parseSessionUsage(
+                kotlinx.serialization.json.Json.parseToJsonElement("""{"cost":{"amount":-0,"currency":"USD"}}"""),
+            )
+        assertEquals(BigDecimal("0"), negativeZero.cost.amount)
+        val frame =
+            RemoteProtocol.parseIncomingFrame(
+                """{"kind":"event","event":{"eventId":"e-usage","sessionId":"sess-1","timestamp":"t","type":"session.usage_updated","payload":{"cost":{"amount":1,"currency":"USD"}}}}""",
+            ) as IncomingRemoteFrame.Event
+        assertEquals("session.usage_updated", frame.event.type)
+        assertEquals(BigDecimal("1"), RemoteProtocol.parseSessionUsage(frame.event.payload).cost.amount)
+        try {
+            RemoteProtocol.parseSessionUsage(
+                kotlinx.serialization.json.Json.parseToJsonElement("""{"cost":{"amount":-1,"currency":"USD"}}"""),
+            )
+            fail("expected ProtocolParseError")
+        } catch (error: ProtocolParseError) {
+            assertTrue(error.message!!.contains("amount"))
+        }
+        try {
+            RemoteProtocol.parseSessionUsage(
+                kotlinx.serialization.json.Json.parseToJsonElement("""{"cost":{"amount":1,"currency":"usd"}}"""),
+            )
+            fail("expected ProtocolParseError")
+        } catch (error: ProtocolParseError) {
+            assertTrue(error.message!!.contains("currency"))
+        }
+        try {
+            RemoteProtocol.parseSessionUsage(
+                kotlinx.serialization.json.Json.parseToJsonElement("""{"cost":{"amount":1,"currency":"US"}}"""),
+            )
+            fail("expected ProtocolParseError")
+        } catch (error: ProtocolParseError) {
+            assertTrue(error.message!!.contains("currency"))
+        }
+        try {
+            RemoteProtocol.parseIncomingFrame(
+                """{"kind":"event","event":{"eventId":"e-bad-usage","sessionId":"sess-1","timestamp":"t","type":"session.usage_updated","payload":{"amount":1,"currency":"USD"}}}""",
+            )
+            fail("expected ProtocolParseError")
+        } catch (error: ProtocolParseError) {
+            assertTrue(error.message!!.contains("cost"))
+        }
+        try {
+            RemoteProtocol.parseIncomingFrame(
+                """{"kind":"event","event":{"eventId":"e-bad-amount","sessionId":"sess-1","timestamp":"t","type":"session.usage_updated","payload":{"cost":{"amount":"1","currency":"USD"}}}}""",
+            )
+            fail("expected ProtocolParseError")
+        } catch (error: ProtocolParseError) {
+            assertTrue(error.message!!.contains("amount"))
         }
     }
 

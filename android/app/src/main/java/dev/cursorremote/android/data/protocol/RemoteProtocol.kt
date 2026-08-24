@@ -1,5 +1,6 @@
 package dev.cursorremote.android.data.protocol
 
+import java.math.BigDecimal
 import java.math.BigInteger
 import java.net.URI
 import java.net.URLEncoder
@@ -108,6 +109,15 @@ data class SessionContextBreakdownCategory(
     val id: String,
     val displayName: String,
     val tokens: Long,
+)
+
+data class SessionCost(
+    val amount: BigDecimal,
+    val currency: String,
+)
+
+data class SessionUsage(
+    val cost: SessionCost,
 )
 
 data class RemoteCommandResult(val requestId: String, val ok: Boolean, val value: JsonElement?, val error: String?)
@@ -220,6 +230,7 @@ object RemoteProtocol {
     val SESSION_STATUSES = setOf("idle", "running", "waiting_approval", "waiting_user", "completed", "failed", "interrupted", "disconnected")
     val DIFF_SOURCES = setOf("git", "none")
     val DIFF_CHANGES = setOf("modified", "added", "deleted", "renamed", "untracked")
+    private val CURRENCY_CODE = Regex("^[A-Z]{3}$")
     val CHAT_EVENT_TYPES =
         setOf(
             "session.status_changed",
@@ -524,6 +535,11 @@ object RemoteProtocol {
         return parseList(root["categories"], "categories", ::parseSessionContextBreakdownCategory)
     }
 
+    fun parseSessionUsage(value: JsonElement): SessionUsage {
+        val root = parseObject(value, "session.usage_updated")
+        return SessionUsage(cost = parseSessionCost(requireObject(root, "cost")))
+    }
+
     fun parseChatEvent(event: RemoteEvent): ChatEvent? {
         if (event.type !in CHAT_EVENT_TYPES) {
             return null
@@ -712,6 +728,7 @@ object RemoteProtocol {
             "model.selection_changed" -> parseModelSelectionChanged(payload)
             "session.context_updated" -> parseSessionContextUsage(payload)
             "session.context_breakdown_updated" -> parseSessionContextBreakdown(payload)
+            "session.usage_updated" -> parseSessionUsage(payload)
         }
         val event =
             RemoteEvent(
@@ -1000,6 +1017,51 @@ object RemoteProtocol {
             throw ProtocolParseError("$key must be a positive safe integer.")
         }
         return parsed
+    }
+
+    private fun parseSessionCost(value: JsonObject): SessionCost {
+        return SessionCost(
+            amount = requireNonNegativeDecimal(value, "amount"),
+            currency = requireCurrencyCode(value, "currency"),
+        )
+    }
+
+    private fun requireNonNegativeDecimal(
+        root: JsonObject,
+        key: String,
+    ): BigDecimal {
+        val value = root[key] as? JsonPrimitive
+        if (value == null || value.isString) {
+            throw ProtocolParseError("$key must be a non-negative decimal number.")
+        }
+        val parsed =
+            try {
+                BigDecimal(value.content)
+            } catch (_: NumberFormatException) {
+                throw ProtocolParseError("$key must be a non-negative decimal number.")
+            }
+        val asDouble = value.content.toDoubleOrNull()
+        if (asDouble == null || !asDouble.isFinite() || asDouble < 0.0) {
+            throw ProtocolParseError("$key must be a non-negative decimal number.")
+        }
+        if (parsed.signum() != 0 && asDouble == 0.0) {
+            throw ProtocolParseError("$key must be a non-negative decimal number.")
+        }
+        if (parsed.signum() == 0) {
+            return BigDecimal.ZERO
+        }
+        return parsed
+    }
+
+    private fun requireCurrencyCode(
+        root: JsonObject,
+        key: String,
+    ): String {
+        val currency = requireNonEmptyString(root, key)
+        if (!CURRENCY_CODE.matches(currency)) {
+            throw ProtocolParseError("$key must be a 3-letter uppercase currency code.")
+        }
+        return currency
     }
 
     private fun requireNonNegativeInt(

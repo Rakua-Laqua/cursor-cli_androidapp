@@ -458,3 +458,26 @@ test('session.context_breakdown_updated payload roundtrips with categories', () 
     { id: 'conversation', displayName: 'Conversation', tokens: 12 },
   ]);
 });
+
+test('session.usage_updated payload roundtrips with nested cost only', () => {
+  const event = {
+    eventId: 'evt_usage',
+    sessionId: 'remote_sess_123',
+    timestamp: '2026-08-24T00:00:07+09:00',
+    type: 'session.usage_updated',
+    payload: {
+      cost: {
+        amount: 0.045,
+        currency: 'USD',
+      },
+    },
+  };
+
+  assert.deepEqual(parseRemoteEvent(serializeEvent(event)), event);
+  const eventFrame = parseRemoteFrame(serializeRemoteFrame({ kind: 'event', event }));
+  assert.equal(eventFrame.kind, 'event');
+  assert.deepEqual(eventFrame.event, event);
+  assert.deepEqual(event.payload, { cost: { amount: 0.045, currency: 'USD' } });
+  assert.equal(JSON.stringify(event.payload).includes('inputTokens'), false);
+  assert.equal(JSON.stringify(event.payload).includes('totalTokens'), false);
+});

@@ -1,6 +1,7 @@
 package dev.cursorremote.android.ui
 
 import dev.cursorremote.android.data.protocol.SessionContextUsage
+import java.math.BigDecimal
 import java.math.BigInteger
 
 fun formatSessionContextUsage(usage: SessionContextUsage): String {
@@ -18,3 +19,5 @@ fun formatSessionContextUsage(usage: SessionContextUsage): String {
 
 internal fun formatCompactCount(value: Long): String =
     if (value < 1000L) value.toString() else "${value / 1000L}K"
+
+fun formatSessionCost(amount: BigDecimal): String = amount.stripTrailingZeros().toPlainString()

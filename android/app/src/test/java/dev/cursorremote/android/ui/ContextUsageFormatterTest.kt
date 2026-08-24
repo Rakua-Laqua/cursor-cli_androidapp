@@ -1,6 +1,7 @@
 package dev.cursorremote.android.ui
 
 import dev.cursorremote.android.data.protocol.SessionContextUsage
+import java.math.BigDecimal
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -32,5 +33,15 @@ class ContextUsageFormatterTest {
         assertEquals("12", formatCompactCount(12))
         assertEquals("5K", formatCompactCount(5000))
         assertEquals("1K", formatCompactCount(1999))
+    }
+
+    @Test
+    fun sessionCostFormatsPlainDecimalIncludingZero() {
+        assertEquals("0", formatSessionCost(BigDecimal.ZERO))
+        assertEquals("0", formatSessionCost(BigDecimal("0.0")))
+        assertEquals("0.045", formatSessionCost(BigDecimal("0.045")))
+        assertEquals("0.25", formatSessionCost(BigDecimal("0.250")))
+        assertEquals("1", formatSessionCost(BigDecimal("1.0")))
+        assertEquals("0.123456789012345678", formatSessionCost(BigDecimal("0.123456789012345678")))
     }
 }
