@@ -1,5 +1,20 @@
 # CHANGELOG
 
+## [1.17.0] - 2026-08-24
+
+### 追加
+
+- 既定マイクは本体マイク。built-in source が無ければ Bluetooth へ落とさず fail-closed で拒否する。
+- debug ビルド専用の audio routing probe。launcher には出さず明示 launch だけ。録音中の routed device、AudioManager mode、端末情報、PCM の frame/byte と peak/RMS を画面に出す。PCM 本体は保存もログもしない。communication mode と Bluetooth SCO は要求しない。
+
+### 変更
+
+- パッケージ版 1.17.0、Android `versionCode` 30 / `versionName` 1.17.0。本番 manifest / Chat / protocol / daemon / relay の挙動は変えない。Auto / Bluetooth 設定と TASK-501 / TASK-502 / TASK-503 は未実装。TASK-500 / Gate D / Phase 5 は、対象実機で Bluetooth playback と本体マイク routing を測るまで pending。設定変更と data migration は不要。
+
+### テスト
+
+- `npm test` protocol 19 / daemon 125 / relay 8 all pass。`npm run lint` pass。targeted Prettier pass。Gradle testDebugUnitTest/assembleDebug/lintDebug BUILD SUCCESSFUL with 71 Android unit tests and zero failures。`git diff --check` pass。real-device validation not run。
+
 ## [1.16.0] - 2026-08-24
 
 ### 追加
