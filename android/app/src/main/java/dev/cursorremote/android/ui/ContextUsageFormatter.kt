@@ -16,5 +16,5 @@ fun formatSessionContextUsage(usage: SessionContextUsage): String {
     return "$usedText / $sizeText · $percent%"
 }
 
-private fun formatCompactCount(value: Long): String =
+internal fun formatCompactCount(value: Long): String =
     if (value < 1000L) value.toString() else "${value / 1000L}K"

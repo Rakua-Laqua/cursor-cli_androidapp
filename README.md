@@ -4,7 +4,7 @@ Android から PC 上の Cursor CLI / ACP セッションを操作するため�
 
 ## Repository layout
 
-- `android/` — Android ネイティブクライアント。v1.14.0 は Workspace / Session / メモリ内 Chat、Permission approval、手動 Diff、応答内ファイルリンクと read-only Viewer、in-process 通知、Chat header の動的 Model Picker と Model Visibility、valid `session.context_updated` 受信時だけの条件付き Context 表示。QR カメラと TLS は未完です。
+- `android/` — Android ネイティブクライアント。v1.15.0 は Workspace / Session / メモリ内 Chat、Permission approval、手動 Diff、応答内ファイルリンクと read-only Viewer、in-process 通知、Chat header の動的 Model Picker と Model Visibility、valid `session.context_updated` 受信時だけの条件付き Context 表示、structured breakdown 受信時は展開可能なカテゴリ別内訳。QR カメラと TLS は未完です。
 - `daemon/` — PC 上で動作する Local Daemon。Phase 1 の ACP / Workspace / Session / metadata と、簡易クライアント `remote-dev`、Relay outbound、Device Pairing バックエンドを含みます。
 - `relay/` — Android と Daemon を中継する Relay Server。v1.4.0 で localhost WebSocket core と `/client` 認証ゲートを持ちます。
 - `protocol/` — Android 向け Remote Protocol の共有 TypeScript 型と安全な JSON 境界処理です。
@@ -75,4 +75,4 @@ gradle :app:assembleDebug :app:testDebugUnitTest
 
 Phase 1 の Local Daemon / ACP / Workspace / Session / metadata / Local E2E は `remote-dev` で固定します。実機の Cursor CLI / ACP Capability は `docs/acp_capability_report.md`、TASK-105 の一連確認は `docs/local_e2e_report.md` に記録済みです。未観測の機能を存在する前提で実装しないという拘束は維持します。
 
-Phase 2 は TASK-200〜204（v1.3.0〜v1.7.1）で Gate B 通過。Phase 3 の TASK-300〜303 は v1.8.0〜v1.11.0 で完了（TASK-300 は Gate C 通過）。TASK-400 Dynamic Model Catalog は v1.12.0。TASK-401 Model Visibility は v1.13.0。TASK-402 Session Context Usage は v1.14.0。次は TASK-403。QR カメラ、TLS、履歴永続化 / 再接続復元は未完です。詳細は `CHANGELOG.md` と `docs/implementation_status.md` です。
+Phase 2 は TASK-200〜204（v1.3.0〜v1.7.1）で Gate B 通過。Phase 3 の TASK-300〜303 は v1.8.0〜v1.11.0 で完了（TASK-300 は Gate C 通過）。TASK-400 Dynamic Model Catalog は v1.12.0。TASK-401 Model Visibility は v1.13.0。TASK-402 Session Context Usage は v1.14.0。TASK-403 Context Breakdown は v1.15.0。次は TASK-404。QR カメラ、TLS、履歴永続化 / 再接続復元は未完です。詳細は `CHANGELOG.md` と `docs/implementation_status.md` です。

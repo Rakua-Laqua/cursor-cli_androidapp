@@ -417,6 +417,88 @@ class FoundationTest {
     }
 
     @Test
+    fun task403SessionContextBreakdownStoresForSelectedSessionIgnoresInvalidAndClearsOnSwitch() {
+        withViewModel { viewModel, dao, transport ->
+            runBlocking {
+                dao.upsert(pairedMachine())
+                assertTrue(viewModel.connectExistingMachine("pc-1"))
+                assertTrue(viewModel.openWorkspace("ws-1"))
+                assertTrue(viewModel.resumeSession("sess-1"))
+                assertNull(viewModel.uiState.value.sessionContextBreakdown)
+                transport.emit(
+                    eventJson(
+                        "session.context_breakdown_updated",
+                        "sess-1",
+                        """{"categories":[{"id":"system_prompt","displayName":"System prompt","tokens":5000}]}""",
+                    ),
+                )
+                assertEquals(1, viewModel.uiState.value.sessionContextBreakdown?.size)
+                assertEquals("system_prompt", viewModel.uiState.value.sessionContextBreakdown?.first()?.id)
+                assertEquals("System prompt", viewModel.uiState.value.sessionContextBreakdown?.first()?.displayName)
+                assertEquals(5000L, viewModel.uiState.value.sessionContextBreakdown?.first()?.tokens)
+                transport.emit(
+                    eventJson(
+                        "session.context_breakdown_updated",
+                        "sess-1",
+                        """{"categories":[{"id":"tools","displayName":"Tools","tokens":12},{"id":"unknown_cat","displayName":"Unknown","tokens":3}]}""",
+                    ),
+                )
+                assertEquals(listOf("tools", "unknown_cat"), viewModel.uiState.value.sessionContextBreakdown?.map { it.id })
+                assertEquals(12L, viewModel.uiState.value.sessionContextBreakdown?.first()?.tokens)
+                transport.emit(
+                    eventJson(
+                        "session.context_breakdown_updated",
+                        "other",
+                        """{"categories":[{"id":"rules","displayName":"Rules","tokens":1}]}""",
+                    ),
+                )
+                assertEquals("tools", viewModel.uiState.value.sessionContextBreakdown?.first()?.id)
+                transport.emit(
+                    eventJson(
+                        "session.context_breakdown_updated",
+                        null,
+                        """{"categories":[{"id":"rules","displayName":"Rules","tokens":1}]}""",
+                    ),
+                )
+                assertEquals("tools", viewModel.uiState.value.sessionContextBreakdown?.first()?.id)
+                transport.emit(
+                    eventJson(
+                        "session.context_breakdown_updated",
+                        "sess-1",
+                        """{"categories":[{"id":"","displayName":"Bad","tokens":1}]}""",
+                    ),
+                )
+                assertEquals("tools", viewModel.uiState.value.sessionContextBreakdown?.first()?.id)
+                viewModel.selectSession("sess-2")
+                assertNull(viewModel.uiState.value.sessionContextBreakdown)
+                viewModel.selectSession("sess-1")
+                transport.emit(
+                    eventJson(
+                        "session.context_breakdown_updated",
+                        "sess-1",
+                        """{"categories":[{"id":"mcp","displayName":"MCP","tokens":7}]}""",
+                    ),
+                )
+                assertEquals("mcp", viewModel.uiState.value.sessionContextBreakdown?.first()?.id)
+                viewModel.selectWorkspace("ws-2")
+                assertNull(viewModel.uiState.value.sessionContextBreakdown)
+                viewModel.selectWorkspace("ws-1")
+                viewModel.selectSession("sess-1")
+                transport.emit(
+                    eventJson(
+                        "session.context_breakdown_updated",
+                        "sess-1",
+                        """{"categories":[{"id":"skills","displayName":"Skills","tokens":9}]}""",
+                    ),
+                )
+                assertEquals("skills", viewModel.uiState.value.sessionContextBreakdown?.first()?.id)
+                viewModel.selectMachine("pc-2")
+                assertNull(viewModel.uiState.value.sessionContextBreakdown)
+            }
+        }
+    }
+
+    @Test
     fun listAndResumeFailuresStayOnCurrentSelection() {
         withViewModel(autoRespond = false) { viewModel, dao, transport ->
             runBlocking {

@@ -7,7 +7,7 @@
 - 対象リポジトリ: `Rakua-Laqua/cursor-cli_androidapp`
 - ブランチ: `main`
 - 直前リリース基準（v1.3.0）: `c7bff3137511396d8a86d27a341fcddb70f8b316`（`v1.3.0にアップデート`）
-- パッケージ版: `1.14.0`（Android `versionCode` 27 / `versionName` 1.14.0）
+- パッケージ版: `1.15.0`（Android `versionCode` 28 / `versionName` 1.15.0）
 
 この文書は「いまどこまで動くか」の正本である。設計の正本は仕様書、作業順の正本は実装計画である。計画書の未着手タスクを消さない。完了扱いにできるのはリリース済みの範囲だけである。
 
@@ -15,7 +15,7 @@
 
 ## 1. いまの結論
 
-**Cursor Desktop なしで、PC 上の Local Daemon だけから Workspace / Session を操作し、Android からメモリ内 Chat を送受信し、実 ACP の permission を Approve / Reject でき、選択中 Workspace の変更 Diff を手動で確認でき、Assistant 応答内の workspace ファイルを read-only Viewer で開け、background かつ process / 既存 WebSocket 生存中に対象 event を in-process 通知でき、Chat header の Model Picker で選択中 Session の動的 catalog からモデルを切り替え、不要なモデルを端末内で非表示にし、valid `session.context_updated` を受信したときだけ Context 使用量を表示できる。** Relay 経由の Command / Event 中継も localhost では動く。Device Pairing は v1.4.0、Android Skeleton は v1.5.0、Workspace / Session UI は v1.6.0、Chat は v1.7.0、Permission Flow は v1.8.0、Diff Pipeline は v1.9.0、応答内ファイルリンクは v1.10.0、in-process 通知は v1.11.0、動的 Model Catalog は v1.12.0、Model Visibility は v1.13.0、Session Context Usage は v1.14.0。QR カメラ、TLS、履歴永続化 / 再接続復元、Context Breakdown / token-cost / Account Usage は未完。次は TASK-403。
+**Cursor Desktop なしで、PC 上の Local Daemon だけから Workspace / Session を操作し、Android からメモリ内 Chat を送受信し、実 ACP の permission を Approve / Reject でき、選択中 Workspace の変更 Diff を手動で確認でき、Assistant 応答内の workspace ファイルを read-only Viewer で開け、background かつ process / 既存 WebSocket 生存中に対象 event を in-process 通知でき、Chat header の Model Picker で選択中 Session の動的 catalog からモデルを切り替え、不要なモデルを端末内で非表示にし、valid `session.context_updated` を受信したときだけ Context 使用量を表示できる。** Relay 経由の Command / Event 中継も localhost では動く。Device Pairing は v1.4.0、Android Skeleton は v1.5.0、Workspace / Session UI は v1.6.0、Chat は v1.7.0、Permission Flow は v1.8.0、Diff Pipeline は v1.9.0、応答内ファイルリンクは v1.10.0、in-process 通知は v1.11.0、動的 Model Catalog は v1.12.0、Model Visibility は v1.13.0、Session Context Usage は v1.14.0、Context Breakdown は v1.15.0。QR カメラ、TLS、履歴永続化 / 再接続復元、token-cost / Account Usage は未完。次は TASK-404。
 
 | 区分 | 状態 |
 | --- | --- |
@@ -35,10 +35,11 @@
 | TASK-400 Dynamic Model Catalog | **完了・v1.12.0**。実機未実施 |
 | TASK-401 Model Visibility | **完了・v1.13.0**。実機未実施 |
 | TASK-402 Session Context Usage | **完了・v1.14.0**。実機未実施 |
+| TASK-403 Context Breakdown | **完了・v1.15.0**。実機未実施 |
 | Phase 3 | TASK-300〜303 完了 |
-| Phase 4 | TASK-402 完了。次は TASK-403 |
+| Phase 4 | TASK-403 完了。次は TASK-404 |
 
-次の作業は TASK-403 である。
+次の作業は TASK-404 である。
 
 ---
 
@@ -101,7 +102,7 @@
 - Chat 履歴の永続化と再接続復元。
 - FCM、process 死亡後の到達、WebSocket reconnect、notification deep link、Doze（TASK-604）。
 - Account Usage（TASK-405）、File content 保存、Voice。
-- Context Breakdown（TASK-403）、token/cost（TASK-404）。
+- token/cost（TASK-404）。
 - Diff の agent 完了連動の自動更新。
 - 単発 `session cancel`（別プロセスからの停止は未実測のため非公開）。
 - `agent.waiting` の live E2E（current Daemon に emitter が無い。parsing / coordinator unit test のみ）。
@@ -113,6 +114,7 @@
 状態の意味:
 
 - **リリース済み**: パッケージ版 v1.4.0 までに含まれるバックエンド。v1.3.0 の基準コミットは `c7bff3137511396d8a86d27a341fcddb70f8b316`。
+- **実装済み v1.15.0**: TASK-403 Context Breakdown。
 - **実装済み v1.14.0**: TASK-402 Session Context Usage。
 - **実装済み v1.13.0**: TASK-401 Model Visibility。
 - **実装済み v1.12.0**: TASK-400 Dynamic Model Catalog。
@@ -170,7 +172,7 @@ Phase 2 の Chat は v1.7.0。Gate B は 2026-08-22 に通過。実機記録は 
 
 ### Phase 3 以降
 
-TASK-300 Permission Flow は **v1.8.0 で完了**。Gate C 通過。TASK-301 Diff Pipeline は **v1.9.0 で完了**。TASK-302 Cursor Response File Links は **v1.10.0 で完了**。TASK-303 Push Notifications は **v1.11.0 で完了**。Phase 3 はここまで。TASK-400 Dynamic Model Catalog は **v1.12.0 で完了**。TASK-401 Model Visibility は **v1.13.0 で完了**。TASK-402 Session Context Usage は **v1.14.0 で完了**。次は TASK-403。Gate D は TASK-500 Audio Routing の将来 gate であり未通過。
+TASK-300 Permission Flow は **v1.8.0 で完了**。Gate C 通過。TASK-301 Diff Pipeline は **v1.9.0 で完了**。TASK-302 Cursor Response File Links は **v1.10.0 で完了**。TASK-303 Push Notifications は **v1.11.0 で完了**。Phase 3 はここまで。TASK-400 Dynamic Model Catalog は **v1.12.0 で完了**。TASK-401 Model Visibility は **v1.13.0 で完了**。TASK-402 Session Context Usage は **v1.14.0 で完了**。TASK-403 Context Breakdown は **v1.15.0 で完了**。次は TASK-404。Gate D は TASK-500 Audio Routing の将来 gate であり未通過。
 
 ---
 
@@ -375,6 +377,12 @@ Session Context Usage。structured `usage_update` の used/size だけを remote
 
 ---
 
+## 7.9 TASK-403（v1.15.0）
+
+ACP `usage_update` の structured `breakdown` 配列を防御的に `session.context_breakdown_updated` へ変換し、Android Chat header の Context 表示を breakdown 受信時だけ展開可能にした。breakdown 未到着の環境では合計表示のまま。詳細と検証は `CHANGELOG.md` の 1.15.0 と §8。
+
+---
+
 ## 8. 検証の記録
 
 | 対象 | 結果 | 備考 |
@@ -399,6 +407,9 @@ Session Context Usage。structured `usage_update` の used/size だけを remote
 | Android 実機 Model Catalog（TASK-400） | 未実施 | ユーザー方針により実機検証なし |
 | Android 実機 Model Visibility（TASK-401） | 未実施 | ユーザー方針により実機検証なし。実 Room migration / reopen の instrumentation も未実施。unit は FakeHiddenModelDao |
 | Android 実機 Session Context Usage（TASK-402） | 未実施 | ユーザー方針により実機検証なし。installed CLI では `usage_update` 未観測 |
+| `npm test` v1.15.0 | 成功 | protocol 18 / daemon 122 / relay 8、fail 0。`npm run lint` pass |
+| Gradle v1.15.0 | 成功 | `:app:testDebugUnitTest :app:assembleDebug :app:lintDebug` 53 tasks、63 tests pass。`git diff --check` pass |
+| Android 実機 Context Breakdown（TASK-403） | 未実施 | ユーザー方針により実機検証なし。installed CLI では structured breakdown 未観測 |
 | Android 実機 Chat（Gate B） | 通過（2026-08-22） | SM-S928Q / Android 16。下記 |
 | Android 実機 Permission（Gate C） | 通過（2026-08-22） | SM-S928Q / Android 16。下記 |
 | Android 実機 Diff（TASK-301） | 受け入れ（2026-08-22） | SM-S928Q / Android 16。下記 |
@@ -419,12 +430,12 @@ TASK-303（2026-08-22、同端末）: localhost Relay と adb reverse。foregrou
 
 ## 9. モジュール別の現状
 
-| モジュール | 実装済み v1.14.0 | 未着手 |
+| モジュール | 実装済み v1.15.0 | 未着手 |
 | --- | --- | --- |
-| `protocol/` | Event / Command 型、Remote frame、Pairing 型・証明・QR payload、permission requested/resolved と permissionId のみの approve/reject、diff snapshot payload、`file.read` / FileContent payload、model catalog / select payload、`session.context_updated` used/size。`agent.waiting` は既存共有型 | Android 向け追加画面用の型は不要な範囲で増やさない |
-| `daemon/` | ACP、Workspace、metadata、`remote-dev`、Relay outbound、`PairingManager`、device 永続化、PermissionBridge（fail-closed）、bounded Git DiffPipeline、session-bound `file.read`、ACP models / configOptions からの防御的 catalog と `session/set_config_option`、structured `usage_update` → `session.context_updated` | pairing CLI、`agent.waiting` emitter |
+| `protocol/` | Event / Command 型、Remote frame、Pairing 型・証明・QR payload、permission requested/resolved と permissionId のみの approve/reject、diff snapshot payload、`file.read` / FileContent payload、model catalog / select payload、`session.context_updated` used/size、breakdown categories payload。`agent.waiting` は既存共有型 | Android 向け追加画面用の型は不要な範囲で増やさない |
+| `daemon/` | ACP、Workspace、metadata、`remote-dev`、Relay outbound、`PairingManager`、device 永続化、PermissionBridge（fail-closed）、bounded Git DiffPipeline、session-bound `file.read`、ACP models / configOptions からの防御的 catalog と `session/set_config_option`、structured `usage_update` → `session.context_updated`、structured breakdown の防御的変換 | pairing CLI、`agent.waiting` emitter |
 | `relay/` | WebSocket routing / correlation / heartbeat、`/client` の pairing ゲート。generic のまま | TLS |
-| `android/` | TASK-204 Chat（メモリ内）、TASK-300 Permission approval card、TASK-301 手動 Diff UI、TASK-302 応答内リンクと read-only Viewer、TASK-303 in-process 通知、TASK-400 Chat header Model Picker、TASK-401 Model Visibility / Manage Models、TASK-402 条件付き Context 表示 | QR カメラ、履歴永続化 / 再接続復元、FCM / reconnect / deep link / Doze（TASK-604）、Context Breakdown（TASK-403） |
+| `android/` | TASK-204 Chat（メモリ内）、TASK-300 Permission approval card、TASK-301 手動 Diff UI、TASK-302 応答内リンクと read-only Viewer、TASK-303 in-process 通知、TASK-400 Chat header Model Picker、TASK-401 Model Visibility / Manage Models、TASK-402 条件付き Context 表示、TASK-403 折りたたみ Context Breakdown 表示 | QR カメラ、履歴永続化 / 再接続復元、FCM / reconnect / deep link / Doze（TASK-604） |
 | `docs/` | 仕様、計画、ACP 実測、Local E2E、本ファイル | — |
 
 ---
@@ -434,7 +445,7 @@ TASK-303（2026-08-22、同端末）: localhost Relay と adb reverse。foregrou
 計画書と Gate を崩さない。
 
 ```text
-TASK-403 Context Breakdown
+TASK-404 Session Token Usage / Cost
 ```
 
-TASK-402 は v1.14.0。Gate D は TASK-500 の将来 gate であり未通過。Camera / TLS / 履歴永続化 / 再接続復元 / FCM は未完。
+TASK-403 は v1.15.0。Gate D は TASK-500 の将来 gate であり未通過。Camera / TLS / 履歴永続化 / 再接続復元 / FCM は未完。

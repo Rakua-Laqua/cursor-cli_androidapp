@@ -1,5 +1,21 @@
 # CHANGELOG
 
+## [1.15.0] - 2026-08-24
+
+### 追加
+
+- Session Context Breakdown の防御的基盤。ACP `usage_update` に structured `breakdown` 配列が現れたときだけ、Daemon が `session.context_breakdown_updated {categories: [{id, displayName, tokens}]}` を発行する。`id` は非空文字列、`tokens` は非負の safe integer、`displayName` は欠落・非文字列なら `id` と同じ値にする。無効な要素が1つでもあれば breakdown event は出さず、valid な `session.context_updated` は従来どおり出す。推測でのカテゴリ配分はしない。
+- Android は breakdown を選択中 session にだけメモリ保持し、machine / workspace / session 選択変更で usage と一緒に clear する。未知カテゴリも `id + displayName + tokens` として表示できる。Room 永続化なし。
+- Chat header の Context 表示は、breakdown があるときだけタップで展開し、カテゴリ別の displayName と tokens を一覧表示する。breakdown が無い環境では従来どおり合計のみでタップ不可。
+
+### 変更
+
+- パッケージ版 1.15.0、Android `versionCode` 28 / `versionName` 1.15.0。`session.context_breakdown.get` コマンド、`/context` slash command の parser、text scraping、polling は追加していない。Relay は generic のまま。設定変更と data migration は不要。installed Cursor CLI `2026.08.11-e8db854` では structured breakdown は未観測のため、実運用 UI は従来どおり合計のみ表示。経路は test fixture の structured update で検証した。token/cost は TASK-404、Account Usage は TASK-405。
+
+### テスト
+
+- `npm test` は protocol 18 / daemon 122 / relay 8、fail 0。`npm run lint` pass。Gradle `:app:testDebugUnitTest :app:assembleDebug :app:lintDebug` BUILD SUCCESSFUL（53 tasks、63 tests pass）。`git diff --check` pass。実機検証はユーザー方針により未実施。
+
 ## [1.14.0] - 2026-08-23
 
 ### 追加

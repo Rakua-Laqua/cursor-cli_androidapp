@@ -25,4 +25,12 @@ class ContextUsageFormatterTest {
             formatSessionContextUsage(SessionContextUsage(9_007_199_254_740_991L, 1)),
         )
     }
+
+    @Test
+    fun compactCountFormatsCategoryTokens() {
+        assertEquals("0", formatCompactCount(0))
+        assertEquals("12", formatCompactCount(12))
+        assertEquals("5K", formatCompactCount(5000))
+        assertEquals("1K", formatCompactCount(1999))
+    }
 }

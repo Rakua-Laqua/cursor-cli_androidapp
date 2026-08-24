@@ -185,6 +185,16 @@ export interface SessionContextUpdatedPayload extends JsonObject {
   readonly size: number;
 }
 
+export interface SessionContextBreakdownCategoryPayload extends JsonObject {
+  readonly id: string;
+  readonly displayName: string;
+  readonly tokens: number;
+}
+
+export interface SessionContextBreakdownUpdatedPayload extends JsonObject {
+  readonly categories: SessionContextBreakdownCategoryPayload[];
+}
+
 export interface KnownEventPayloads {
   readonly 'workspace.updated': WorkspaceUpdatedPayload;
   readonly 'model.catalog_updated': ModelCatalogPayload;
@@ -193,6 +203,7 @@ export interface KnownEventPayloads {
   readonly 'session.loaded': SessionPayload;
   readonly 'session.status_changed': SessionStatusChangedPayload;
   readonly 'session.context_updated': SessionContextUpdatedPayload;
+  readonly 'session.context_breakdown_updated': SessionContextBreakdownUpdatedPayload;
   readonly 'user.message': UserMessagePayload;
   readonly 'assistant.message': AssistantMessagePayload;
   readonly 'assistant.status': AssistantStatusPayload;

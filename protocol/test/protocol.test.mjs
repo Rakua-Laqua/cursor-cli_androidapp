@@ -434,3 +434,27 @@ test('session.context_updated payload roundtrips with used and size only', () =>
   assert.equal(JSON.stringify(event.payload).includes('cost'), false);
   assert.equal(JSON.stringify(event).includes('session.context.get'), false);
 });
+
+test('session.context_breakdown_updated payload roundtrips with categories', () => {
+  const event = {
+    eventId: 'evt_context_breakdown',
+    sessionId: 'remote_sess_123',
+    timestamp: '2026-08-23T00:00:05+09:00',
+    type: 'session.context_breakdown_updated',
+    payload: {
+      categories: [
+        { id: 'system_prompt', displayName: 'System prompt', tokens: 5000 },
+        { id: 'conversation', displayName: 'Conversation', tokens: 12 },
+      ],
+    },
+  };
+
+  assert.deepEqual(parseRemoteEvent(serializeEvent(event)), event);
+  const eventFrame = parseRemoteFrame(serializeRemoteFrame({ kind: 'event', event }));
+  assert.equal(eventFrame.kind, 'event');
+  assert.deepEqual(eventFrame.event, event);
+  assert.deepEqual(event.payload.categories, [
+    { id: 'system_prompt', displayName: 'System prompt', tokens: 5000 },
+    { id: 'conversation', displayName: 'Conversation', tokens: 12 },
+  ]);
+});

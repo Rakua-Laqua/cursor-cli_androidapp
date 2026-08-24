@@ -104,6 +104,12 @@ data class SessionContextUsage(
     val size: Long,
 )
 
+data class SessionContextBreakdownCategory(
+    val id: String,
+    val displayName: String,
+    val tokens: Long,
+)
+
 data class RemoteCommandResult(val requestId: String, val ok: Boolean, val value: JsonElement?, val error: String?)
 
 data class RemoteEvent(
@@ -513,6 +519,11 @@ object RemoteProtocol {
         return SessionContextUsage(used = used, size = size)
     }
 
+    fun parseSessionContextBreakdown(value: JsonElement): List<SessionContextBreakdownCategory> {
+        val root = parseObject(value, "session.context_breakdown_updated")
+        return parseList(root["categories"], "categories", ::parseSessionContextBreakdownCategory)
+    }
+
     fun parseChatEvent(event: RemoteEvent): ChatEvent? {
         if (event.type !in CHAT_EVENT_TYPES) {
             return null
@@ -700,6 +711,7 @@ object RemoteProtocol {
             "model.catalog_updated" -> parseModelCatalog(payload)
             "model.selection_changed" -> parseModelSelectionChanged(payload)
             "session.context_updated" -> parseSessionContextUsage(payload)
+            "session.context_breakdown_updated" -> parseSessionContextBreakdown(payload)
         }
         val event =
             RemoteEvent(
@@ -779,6 +791,19 @@ object RemoteProtocol {
     private fun permissionDecisionPayload(permissionId: String): JsonObject {
         requireNonEmpty(permissionId, "permissionId")
         return buildJsonObject { put("permissionId", permissionId) }
+    }
+
+    private fun parseSessionContextBreakdownCategory(value: JsonElement): SessionContextBreakdownCategory {
+        val root = parseObject(value, "category")
+        val tokens = requireSafeInteger(root, "tokens")
+        if (tokens < 0) {
+            throw ProtocolParseError("tokens must be a non-negative integer.")
+        }
+        return SessionContextBreakdownCategory(
+            id = requireNonEmptyString(root, "id"),
+            displayName = requireNonEmptyString(root, "displayName"),
+            tokens = tokens,
+        )
     }
 
     private fun parseModelCatalogEntry(value: JsonElement): ModelCatalogEntry {

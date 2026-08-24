@@ -63,6 +63,7 @@ fun ChatScreen(
     onSetModelHidden: (modelId: String, hidden: Boolean) -> Unit,
 ) {
     var draft by rememberSaveable { mutableStateOf("") }
+    var contextExpanded by rememberSaveable { mutableStateOf(false) }
     val listState = rememberLazyListState()
     val lastMessage = uiState.chatMessages.lastOrNull()
     LaunchedEffect(uiState.chatMessages.size, lastMessage?.id, lastMessage?.text) {
@@ -75,7 +76,25 @@ fun ChatScreen(
         TextButton(onClick = onBack) { Text("Back") }
         Text("Chat", style = MaterialTheme.typography.headlineSmall)
         uiState.sessionContextUsage?.let { usage ->
-            Text("${stringResource(R.string.context_usage_label)} ${formatSessionContextUsage(usage)}")
+            val breakdown = uiState.sessionContextBreakdown
+            if (breakdown.isNullOrEmpty()) {
+                Text("${stringResource(R.string.context_usage_label)} ${formatSessionContextUsage(usage)}")
+            } else {
+                Column {
+                    Text(
+                        text = "${stringResource(R.string.context_usage_label)} ${formatSessionContextUsage(usage)} ${if (contextExpanded) "v" else ">"}",
+                        modifier = Modifier.clickable { contextExpanded = !contextExpanded },
+                    )
+                    if (contextExpanded) {
+                        for (category in breakdown) {
+                            Row(Modifier.fillMaxWidth()) {
+                                Text(category.displayName, modifier = Modifier.weight(1f))
+                                Text(formatCompactCount(category.tokens))
+                            }
+                        }
+                    }
+                }
+            }
         }
         StatusBlock(uiState)
         ModelPanel(

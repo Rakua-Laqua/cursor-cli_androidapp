@@ -416,6 +416,65 @@ class RemoteProtocolTest {
         }
     }
 
+    @Test
+    fun sessionContextBreakdownParsesAndRejectsMalformed() {
+        val parsed =
+            RemoteProtocol.parseSessionContextBreakdown(
+                kotlinx.serialization.json.Json.parseToJsonElement(
+                    """{"categories":[{"id":"system_prompt","displayName":"System prompt","tokens":5000},{"id":"unknown_cat","displayName":"Unknown","tokens":12}]}""",
+                ),
+            )
+        assertEquals(2, parsed.size)
+        assertEquals("system_prompt", parsed[0].id)
+        assertEquals("System prompt", parsed[0].displayName)
+        assertEquals(5000L, parsed[0].tokens)
+        assertEquals("unknown_cat", parsed[1].id)
+        assertEquals("Unknown", parsed[1].displayName)
+        assertEquals(12L, parsed[1].tokens)
+        val zero =
+            RemoteProtocol.parseSessionContextBreakdown(
+                kotlinx.serialization.json.Json.parseToJsonElement(
+                    """{"categories":[{"id":"tools","displayName":"Tools","tokens":0}]}""",
+                ),
+            )
+        assertEquals(0L, zero[0].tokens)
+        val max =
+            RemoteProtocol.parseSessionContextBreakdown(
+                kotlinx.serialization.json.Json.parseToJsonElement(
+                    """{"categories":[{"id":"tools","displayName":"Tools","tokens":9007199254740991}]}""",
+                ),
+            )
+        assertEquals(RemoteProtocol.JS_MAX_SAFE_INTEGER, max[0].tokens)
+        val frame =
+            RemoteProtocol.parseIncomingFrame(
+                """{"kind":"event","event":{"eventId":"e-breakdown","sessionId":"sess-1","timestamp":"t","type":"session.context_breakdown_updated","payload":{"categories":[{"id":"mcp","displayName":"MCP","tokens":7}]}}}""",
+            ) as IncomingRemoteFrame.Event
+        assertEquals("session.context_breakdown_updated", frame.event.type)
+        assertEquals("sess-1", frame.event.sessionId)
+        val fromFrame = RemoteProtocol.parseSessionContextBreakdown(frame.event.payload)
+        assertEquals("mcp", fromFrame[0].id)
+        assertEquals("MCP", fromFrame[0].displayName)
+        assertEquals(7L, fromFrame[0].tokens)
+        assertSessionContextBreakdownParseError("id") {
+            """{"categories":[{"id":"","displayName":"System prompt","tokens":1}]}"""
+        }
+        assertSessionContextBreakdownParseError("tokens") {
+            """{"categories":[{"id":"tools","displayName":"Tools","tokens":-1}]}"""
+        }
+        assertSessionContextBreakdownParseError("tokens") {
+            """{"categories":[{"id":"tools","displayName":"Tools","tokens":1.5}]}"""
+        }
+        assertSessionContextBreakdownParseError("categories") { """{"used":1}""" }
+        try {
+            RemoteProtocol.parseIncomingFrame(
+                """{"kind":"event","event":{"eventId":"e-bad-breakdown","sessionId":"sess-1","timestamp":"t","type":"session.context_breakdown_updated","payload":{"categories":[{"id":"","displayName":"x","tokens":1}]}}}""",
+            )
+            fail("expected ProtocolParseError")
+        } catch (error: ProtocolParseError) {
+            assertTrue(error.message!!.contains("id"))
+        }
+    }
+
     private fun chatRemoteEvent(
         type: String,
         payload: String,
@@ -435,6 +494,18 @@ class RemoteProtocolTest {
     ) {
         try {
             RemoteProtocol.parseSessionContextUsage(kotlinx.serialization.json.Json.parseToJsonElement(json()))
+            fail("expected ProtocolParseError")
+        } catch (error: ProtocolParseError) {
+            assertTrue("message=${error.message}", Regex(messagePattern).containsMatchIn(error.message ?: ""))
+        }
+    }
+
+    private fun assertSessionContextBreakdownParseError(
+        messagePattern: String,
+        json: () -> String,
+    ) {
+        try {
+            RemoteProtocol.parseSessionContextBreakdown(kotlinx.serialization.json.Json.parseToJsonElement(json()))
             fail("expected ProtocolParseError")
         } catch (error: ProtocolParseError) {
             assertTrue("message=${error.message}", Regex(messagePattern).containsMatchIn(error.message ?: ""))

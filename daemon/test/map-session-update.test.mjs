@@ -125,3 +125,109 @@ test('usage_update accepts zero and MAX_SAFE_INTEGER bounds', () => {
     ],
   );
 });
+
+test('usage_update with valid breakdown emits context then breakdown events', () => {
+  assert.deepEqual(
+    mapAcpSessionUpdate({
+      sessionUpdate: 'usage_update',
+      used: 10,
+      size: 100,
+      breakdown: [
+        { id: 'system_prompt', displayName: 'System prompt', tokens: 5000 },
+        { id: 'conversation', displayName: 'Conversation', tokens: 12 },
+      ],
+    }),
+    [
+      { type: 'session.context_updated', payload: { used: 10, size: 100 } },
+      {
+        type: 'session.context_breakdown_updated',
+        payload: {
+          categories: [
+            { id: 'system_prompt', displayName: 'System prompt', tokens: 5000 },
+            { id: 'conversation', displayName: 'Conversation', tokens: 12 },
+          ],
+        },
+      },
+    ],
+  );
+});
+
+test('usage_update breakdown displayName falls back to id when missing or not a string', () => {
+  assert.deepEqual(
+    mapAcpSessionUpdate({
+      sessionUpdate: 'usage_update',
+      used: 1,
+      size: 2,
+      breakdown: [
+        { id: 'tools', tokens: 3 },
+        { id: 'rules', displayName: 1, tokens: 4 },
+      ],
+    }),
+    [
+      { type: 'session.context_updated', payload: { used: 1, size: 2 } },
+      {
+        type: 'session.context_breakdown_updated',
+        payload: {
+          categories: [
+            { id: 'tools', displayName: 'tools', tokens: 3 },
+            { id: 'rules', displayName: 'rules', tokens: 4 },
+          ],
+        },
+      },
+    ],
+  );
+});
+
+test('usage_update with invalid breakdown element omits breakdown event only', () => {
+  const expected = [{ type: 'session.context_updated', payload: { used: 10, size: 100 } }];
+  assert.deepEqual(
+    mapAcpSessionUpdate({
+      sessionUpdate: 'usage_update',
+      used: 10,
+      size: 100,
+      breakdown: [
+        { id: 'system_prompt', displayName: 'System prompt', tokens: 1 },
+        { id: '', displayName: 'Bad', tokens: 1 },
+      ],
+    }),
+    expected,
+  );
+  assert.deepEqual(
+    mapAcpSessionUpdate({
+      sessionUpdate: 'usage_update',
+      used: 10,
+      size: 100,
+      breakdown: [{ id: 'tools', displayName: 'Tools', tokens: -1 }],
+    }),
+    expected,
+  );
+  assert.deepEqual(
+    mapAcpSessionUpdate({
+      sessionUpdate: 'usage_update',
+      used: 10,
+      size: 100,
+      breakdown: [{ id: 'tools', displayName: 'Tools', tokens: 1.5 }],
+    }),
+    expected,
+  );
+  assert.deepEqual(
+    mapAcpSessionUpdate({
+      sessionUpdate: 'usage_update',
+      used: 10,
+      size: 100,
+      breakdown: [null],
+    }),
+    expected,
+  );
+});
+
+test('usage_update without breakdown key stays context_updated only', () => {
+  assert.deepEqual(
+    mapAcpSessionUpdate({
+      sessionUpdate: 'usage_update',
+      used: 10,
+      size: 100,
+    }),
+    [{ type: 'session.context_updated', payload: { used: 10, size: 100 } }],
+  );
+});

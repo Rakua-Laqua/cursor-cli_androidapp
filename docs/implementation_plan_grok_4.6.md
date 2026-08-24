@@ -714,6 +714,10 @@ Context 53K / 200K · 26% >
 
 展開時だけ詳細表示。
 
+### 実施記録
+
+2026-08-24、v1.15.0 で実装。ACP `usage_update` の structured `breakdown` 配列（全要素が非空 `id`・非負 safe integer `tokens` を持つ場合のみ）を `session.context_breakdown_updated` へ変換する防御的基盤。`displayName` 欠落時は `id` を使う。Android は選択中 session のみ保持し、Chat header の Context 表示は breakdown 受信時だけタップ展開でカテゴリ別 tokens を表示する。installed Cursor CLI `2026.08.11-e8db854` では structured breakdown は未観測のため、実運用では合計のみ表示のまま。`session.context_breakdown.get`・`/context` parser・polling は実装しない。実機検証は未実施。次は TASK-404。詳細は `CHANGELOG.md` と `docs/implementation_status.md`。
+
 ---
 
 ## TASK-404: Session Token Usage / Cost

@@ -1,6 +1,8 @@
 import type {
   AssistantMessagePayload,
   AssistantStatusPayload,
+  SessionContextBreakdownCategoryPayload,
+  SessionContextBreakdownUpdatedPayload,
   SessionContextUpdatedPayload,
   UserMessagePayload,
 } from '@cursor-remote/protocol';
@@ -9,7 +11,11 @@ export type MappedSessionEvent =
   | { readonly type: 'user.message'; readonly payload: UserMessagePayload }
   | { readonly type: 'assistant.message'; readonly payload: AssistantMessagePayload }
   | { readonly type: 'assistant.status'; readonly payload: AssistantStatusPayload }
-  | { readonly type: 'session.context_updated'; readonly payload: SessionContextUpdatedPayload };
+  | { readonly type: 'session.context_updated'; readonly payload: SessionContextUpdatedPayload }
+  | {
+      readonly type: 'session.context_breakdown_updated';
+      readonly payload: SessionContextBreakdownUpdatedPayload;
+    };
 
 export function mapAcpSessionUpdate(update: unknown): MappedSessionEvent[] {
   if (!isRecord(update)) {
@@ -43,7 +49,17 @@ export function mapAcpSessionUpdate(update: unknown): MappedSessionEvent[] {
     if (used === undefined || size === undefined) {
       return [];
     }
-    return [{ type: 'session.context_updated', payload: { used, size } }];
+    const events: MappedSessionEvent[] = [
+      { type: 'session.context_updated', payload: { used, size } },
+    ];
+    const categories = readContextBreakdown(update.breakdown);
+    if (categories !== undefined) {
+      events.push({
+        type: 'session.context_breakdown_updated',
+        payload: { categories },
+      });
+    }
+    return events;
   }
 
   return [];
@@ -79,4 +95,26 @@ function readNonNegativeSafeInteger(value: unknown): number | undefined {
     return undefined;
   }
   return value;
+}
+
+function readContextBreakdown(value: unknown): SessionContextBreakdownCategoryPayload[] | undefined {
+  if (!Array.isArray(value)) {
+    return undefined;
+  }
+  const categories: SessionContextBreakdownCategoryPayload[] = [];
+  for (const item of value) {
+    if (!isRecord(item)) {
+      return undefined;
+    }
+    if (typeof item.id !== 'string' || item.id.length === 0) {
+      return undefined;
+    }
+    const tokens = readNonNegativeSafeInteger(item.tokens);
+    if (tokens === undefined) {
+      return undefined;
+    }
+    const displayName = typeof item.displayName === 'string' ? item.displayName : item.id;
+    categories.push({ id: item.id, displayName, tokens });
+  }
+  return categories;
 }
