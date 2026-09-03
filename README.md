@@ -75,4 +75,4 @@ gradle :app:assembleDebug :app:testDebugUnitTest
 
 Phase 1 の Local Daemon / ACP / Workspace / Session / metadata / Local E2E は `remote-dev` で固定します。実機の Cursor CLI / ACP Capability は `docs/acp_capability_report.md`、TASK-105 の一連確認は `docs/local_e2e_report.md` に記録済みです。未観測の機能を存在する前提で実装しないという拘束は維持します。
 
-Phase 2 は TASK-200〜204（v1.3.0〜v1.7.1）で Gate B 通過。Phase 3 の TASK-300〜303 は v1.8.0〜v1.11.0 で完了（TASK-300 は Gate C 通過）。Phase 4 の TASK-400〜405 は v1.12.0〜v1.16.0 で完了（Session Cost は v1.16.0。Account Usage は公式安定 interface が無く dormant）。Phase 5 は進行中。v1.17.0 は debug-only routing 診断をリリースしたが、TASK-500 と Gate D は実機未測のため pending。TASK-501/502/503 は未着手。QR カメラ、TLS、履歴永続化 / 再接続復元は未完です。詳細は `CHANGELOG.md` と `docs/implementation_status.md` です。
+Phase 2 は TASK-200〜204（v1.3.0〜v1.7.1）で Gate B 通過。Phase 3 の TASK-300〜303 は v1.8.0〜v1.11.0 で完了（TASK-300 は Gate C 通過）。Phase 4 の TASK-400〜405 は v1.12.0〜v1.16.0 で完了（Session Cost は v1.16.0。Account Usage は公式安定 interface が無く dormant）。Phase 5 は進行中。v1.17.0 の debug-only routing 診断を使い、2026-09-03 に対象実機で TASK-500 を完了して Gate D を通過。TASK-501/502/503 は未着手。QR カメラ、TLS、履歴永続化 / 再接続復元は未完です。詳細は `CHANGELOG.md` と `docs/implementation_status.md` です。

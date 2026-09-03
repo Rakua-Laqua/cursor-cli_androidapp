@@ -773,7 +773,7 @@ Cursor契約上の残量を正式に取得できる方法が存在するか確�
 
 ### 実施記録
 
-2026-08-24、v1.16.0 で capability gate 完了。個人 Account Usage の公式安定 structured interface は無い。Dashboard scraping / private endpoint / `/usage` text parse / session cost 推測 / pool 合算は行わず、account command/event は dormant、gauge は非表示。Admin / Organization pooled usage API は別 credential と組織 semantics のため現 product scope 外。Phase 4 完了。次は Phase 5 TASK-500（実機必須、現状は未着手）。根拠は `docs/acp_capability_report.md`。
+2026-08-24、v1.16.0 で capability gate 完了。個人 Account Usage の公式安定 structured interface は無い。Dashboard scraping / private endpoint / `/usage` text parse / session cost 推測 / pool 合算は行わず、account command/event は dormant、gauge は非表示。Admin / Organization pooled usage API は別 credential と組織 semantics のため現 product scope 外。Phase 4 完了。根拠は `docs/acp_capability_report.md`。後続状況は Phase 5 の実施記録に記載する。
 
 ---
 
@@ -781,7 +781,7 @@ Cursor契約上の残量を正式に取得できる方法が存在するか確�
 
 ## TASK-500: Android Audio Routing Spike
 
-音声認識より先に実施する。実機の audio routing を確認する gate であり、ユーザー方針により実機検証できない現状では未着手。
+音声認識より先に実施する、実機の audio routing gate。2026-09-03、SM-S928Q / Android 16 と JBL Tour Pro 3 の構成で Bluetooth playback 継続、本体マイク routing、`MODE_NORMAL` 維持を確認し完了した。Gate D は通過。測定記録は `docs/android_audio_routing_report.md`。他端末での互換性確認は継続課題とする。
 
 ### 確認する構成
 
@@ -1132,6 +1132,8 @@ TASK-300 Permission Flowが完成するまで危険な自動実行機能を追�
 ## Gate D
 
 TASK-500 Audio Routing Spikeが成功するまでSTT UIを完成させない。
+
+2026-09-03: SM-S928Q / Android 16 で TASK-500 を完了し、Gate D を通過。詳細は `docs/android_audio_routing_report.md`。
 
 理由:
 今回の音声機能で最重要なのは認識エンジンよりBluetooth接続時の入力経路である。

@@ -1,11 +1,11 @@
 # Android Audio Routing Report
 
-- 文書の性質: 測定記録と runbook。成功証拠ではない。
-- 対象: TASK-500（未完了） / Gate D（未通過）
-- 記録日: 2026-08-24
+- 文書の性質: TASK-500 の対象実機測定記録と runbook
+- 対象: TASK-500（完了） / Gate D（通過）
+- 記録日: 2026-09-03
 - 正本: [`docs/cursor_remote_android_spec_v0.3.md`](cursor_remote_android_spec_v0.3.md)（音声入力）、[`docs/implementation_plan_grok_4.6.md`](implementation_plan_grok_4.6.md)（TASK-500 / Gate D）
 
-この文書は debug-only 診断 harness の起動手順と、将来の実機記入欄を残す。TASK-500 も Gate D も、対象実機で Bluetooth playback と本体マイク routing を測るまで pending のままである。TASK-501 / TASK-502 / TASK-503 は未着手。STT UI や本番 voice flow は存在しない。
+2026-09-03、対象実機で Bluetooth playback を継続したまま本体マイクの PCM 入力を確認した。TASK-500 は完了、Gate D は通過とする。TASK-501 / TASK-502 / TASK-503 は未着手であり、STT UI や本番 voice flow はまだ存在しない。
 
 ---
 
@@ -14,14 +14,14 @@
 | 項目 | 状態 |
 | --- | --- |
 | debug-only `AudioRoutingProbeActivity` | 実装済み（debug ビルド、明示 adb launch） |
-| fail-closed Built-in mic policy | 実装済み（JVM unit test）。実機未測 |
-| TASK-500 | **未完了** |
-| Gate D | **未通過** |
+| fail-closed Built-in mic policy | 実装済み。JVM unit test と対象実機で確認済み |
+| TASK-500 | **完了（2026-09-03）** |
+| Gate D | **通過（2026-09-03）** |
 | TASK-501 Push-to-Talk Recorder | **未着手** |
 | TASK-502 STT Adapter | **未着手** |
 | TASK-503 Voice Prompt UX | **未着手** |
 
-本番 `AndroidManifest` と Chat にはマイク権限も voice UI もない。診断結果を Gate D 成功と読まない。
+本番 `AndroidManifest` と Chat にはマイク権限も voice UI もない。Gate D の判定は probe 画面だけではなく、同時取得した MediaSession、AudioFlinger、AudioService の状態を合わせて行った。
 
 ---
 
@@ -49,30 +49,26 @@ APK 経路が異なる場合は `app/build/outputs/apk/debug/` の debug APK を
 
 ## 3. 実機結果表
 
-未記入は未測定を意味する。行を埋めても、Bluetooth playback 継続と本体マイク routing が対象端末で揃うまで TASK-500 / Gate D は閉じない。
+最終確認は 2026-09-03 22:35 JST。debug APK は `versionName=1.17.0` / `versionCode=30`、Bluetooth 再生には 12.84 秒の WAV テスト音源を使用した。音源と画面取得用の一時ファイルは検証後に端末と PC から削除した。
 
 | Device | Android | BT playback connected | Built-in preferred accepted | Routed input | mode before / during / after | PCM frames / peak / RMS | Errors | Notes |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| | | | | | | | | 未測定。TASK-500 pending |
+| Samsung SM-S928Q | 16 / SDK 36 | JBL Tour Pro 3 / BLE。before・during・after とも再生中 | `true` | `TYPE_BUILTIN_MIC`、id 22 | `MODE_NORMAL` / `MODE_NORMAL` / `MODE_NORMAL` | 48640 / 699 / 182.798 | なし | `VOICE_RECOGNITION`、16-bit mono 16 kHz、97280 bytes、samples arrived=`true` |
 
-コピー用メモ（Start 後の Result から転記）:
+外部状態の確認結果:
 
-```text
-manufacturer / model / sdk:
-preference / decision:
-setPreferredDevice accepted:
-routed-device observations:
-AudioManager.mode before/during/after:
-PCM frames / bytes / peak / RMS / samples arrived:
-errors:
-```
+- MediaSession は before / during / after の全時点で `PLAYING`。
+- AudioFlinger の `AUDIO_DEVICE_OUT_BLE_HEADSET` thread は全時点で `Standby: no`、active track は 1。
+- `setPreferredDevice` は `true`。録音中の actual routed device は本体マイク id 22 のみ。
+- `communicationModeRequested=false`、`bluetoothScoRequested=false`。SCO は requested / applied とも `false`、`SCO_STATE_INACTIVE`。
+- PCM 本体は保存していない。
+
+以上から、計画書の「Bluetooth 接続中に本体マイク録音が成立することを少なくとも対象端末で確認する」を満たすため、TASK-500 完了・Gate D 通過と判定する。
 
 ---
 
-## 4. この文書が証明しないこと
+## 4. 未確認・未実装の範囲
 
-- TASK-500 完了
-- Gate D 通過
 - Phase 5 完了
-- Bluetooth 接続中の本体マイク録音が実機で成立したこと
+- SM-S928Q / Android 16 以外の端末での互換性
 - STT / Push-to-Talk / Voice UX の実装

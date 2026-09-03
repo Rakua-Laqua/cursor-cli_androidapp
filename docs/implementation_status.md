@@ -1,13 +1,13 @@
 # 実装進捗スナップショット
 
 - 文書バージョン: v0.1
-- 記録日: 2026-08-24
+- 記録日: 2026-09-03
 - 対象設計書: `docs/cursor_remote_android_spec_v0.3.md`
 - 実装計画: `docs/implementation_plan_grok_4.6.md`
 - 対象リポジトリ: `Rakua-Laqua/cursor-cli_androidapp`
 - ブランチ: `main`
 - 直前リリース基準（v1.3.0）: `c7bff3137511396d8a86d27a341fcddb70f8b316`（`v1.3.0にアップデート`）
-- パッケージ版: `1.17.0`（Android `versionCode` 30 / `versionName` 1.17.0）
+- パッケージ版: `1.17.1`（Android `versionCode` 31 / `versionName` 1.17.1）
 
 この文書は「いまどこまで動くか」の正本である。設計の正本は仕様書、作業順の正本は実装計画である。計画書の未着手タスクを消さない。完了扱いにできるのはリリース済みの範囲だけである。
 
@@ -15,7 +15,7 @@
 
 ## 1. いまの結論
 
-**Cursor Desktop なしで、PC 上の Local Daemon だけから Workspace / Session を操作し、Android からメモリ内 Chat を送受信し、実 ACP の permission を Approve / Reject でき、選択中 Workspace の変更 Diff を手動で確認でき、Assistant 応答内の workspace ファイルを read-only Viewer で開け、background かつ process / 既存 WebSocket 生存中に対象 event を in-process 通知でき、Chat header の Model Picker で選択中 Session の動的 catalog からモデルを切り替え、不要なモデルを端末内で非表示にし、valid `session.context_updated` を受信したときだけ Context 使用量を表示でき、valid `session.usage_updated` の cost があるときだけ独立した Usage を表示できる。** Relay 経由の Command / Event 中継も localhost では動く。Device Pairing は v1.4.0、Android Skeleton は v1.5.0、Workspace / Session UI は v1.6.0、Chat は v1.7.0、Permission Flow は v1.8.0、Diff Pipeline は v1.9.0、応答内ファイルリンクは v1.10.0、in-process 通知は v1.11.0、動的 Model Catalog は v1.12.0、Model Visibility は v1.13.0、Session Context Usage は v1.14.0、Context Breakdown は v1.15.0、Session Cost は v1.16.0。QR カメラ、TLS、履歴永続化 / 再接続復元は未完。個人 Account Usage は公式安定 interface が無く dormant。v1.17.0 は debug-only audio routing 診断をリリース。Phase 5 は進行中。TASK-500 は未完了、Gate D は未通過、TASK-501/502/503 は未着手。
+**Cursor Desktop なしで、PC 上の Local Daemon だけから Workspace / Session を操作し、Android からメモリ内 Chat を送受信し、実 ACP の permission を Approve / Reject でき、選択中 Workspace の変更 Diff を手動で確認でき、Assistant 応答内の workspace ファイルを read-only Viewer で開け、background かつ process / 既存 WebSocket 生存中に対象 event を in-process 通知でき、Chat header の Model Picker で選択中 Session の動的 catalog からモデルを切り替え、不要なモデルを端末内で非表示にし、valid `session.context_updated` を受信したときだけ Context 使用量を表示でき、valid `session.usage_updated` の cost があるときだけ独立した Usage を表示できる。** Relay 経由の Command / Event 中継も localhost では動く。Device Pairing は v1.4.0、Android Skeleton は v1.5.0、Workspace / Session UI は v1.6.0、Chat は v1.7.0、Permission Flow は v1.8.0、Diff Pipeline は v1.9.0、応答内ファイルリンクは v1.10.0、in-process 通知は v1.11.0、動的 Model Catalog は v1.12.0、Model Visibility は v1.13.0、Session Context Usage は v1.14.0、Context Breakdown は v1.15.0、Session Cost は v1.16.0。QR カメラ、TLS、履歴永続化 / 再接続復元は未完。個人 Account Usage は公式安定 interface が無く dormant。v1.17.0 の debug-only audio routing 診断を使い、2026-09-03 に対象実機で TASK-500 を完了して Gate D を通過した。Phase 5 は進行中で、TASK-501/502/503 は未着手。
 
 | 区分 | 状態 |
 | --- | --- |
@@ -38,12 +38,11 @@
 | TASK-403 Context Breakdown | **完了・v1.15.0**。実機未実施 |
 | TASK-404 Session Cost | **完了・v1.16.0**。実機未実施 |
 | TASK-405 Account Usage Capability | **完了・v1.16.0**（dormant gate）。実機未実施 |
-| TASK-500 Android Audio Routing | **未完了**。v1.17.0 で debug-only 診断 harness をリリース。Gate D 未通過 |
+| TASK-500 Android Audio Routing | **完了**。v1.17.0 の debug-only 診断 harness を対象実機で確認（2026-09-03） |
+| Gate D（Android Audio Routing） | **通過**。対象実機の記録は `docs/android_audio_routing_report.md` |
 | Phase 3 | TASK-300〜303 完了 |
 | Phase 4 | **完了・v1.16.0** |
-| Phase 5 | **進行中**。TASK-500 未完了、TASK-501/502/503 未着手 |
-
-次の作業は Phase 5 TASK-500 である。v1.17.0 で debug-only 診断 harness をリリース済み。TASK-500 は未完了。Gate D は未通過。Phase 5 は進行中。TASK-501 / TASK-502 / TASK-503 は未着手。Bluetooth playback と本体マイク routing の実機測定が残る。
+| Phase 5 | **進行中**。TASK-500 完了、TASK-501/502/503 未着手 |
 
 ---
 
@@ -108,7 +107,7 @@
 
 ### 動く（v1.17.0）
 
-- debug-only audio routing 診断。本体マイクを fail-closed で選び、明示 launch の probe で routed device / mode / PCM 指標を測る。本番 Chat / 権限は不変。操作と証拠の扱いは `docs/android_audio_routing_report.md`。TASK-500 / Gate D は実機未測のため未完了。
+- debug-only audio routing 診断。本体マイクを fail-closed で選び、明示 launch の probe で routed device / mode / PCM 指標を測る。本番 Chat / 権限は不変。2026-09-03 に対象実機で TASK-500 / Gate D を完了した。測定記録は `docs/android_audio_routing_report.md`。
 
 ### まだない
 
@@ -117,8 +116,8 @@
 - TLS / インターネット公開用の認証。`/machine` は localhost の非認証 `ws://` のまま。
 - Chat 履歴の永続化と再接続復元。
 - FCM、process 死亡後の到達、WebSocket reconnect、notification deep link、Doze（TASK-604）。
-- Account Usage（TASK-405）は公式安定 interface が無く dormant。File content 保存、Voice。
-- TASK-500 Android Audio Routing。v1.17.0 の debug-only harness はリリース済み。実機の Bluetooth playback + 本体マイク測定は未完、Gate D 未通過。
+- Account Usage（TASK-405）は公式安定 interface が無く dormant。File content 保存。
+- TASK-501 Push-to-Talk Recorder、TASK-502 STT Adapter、TASK-503 Voice Prompt UX。
 - Diff の agent 完了連動の自動更新。
 - 単発 `session cancel`（別プロセスからの停止は未実測のため非公開）。
 - `agent.waiting` の live E2E（current Daemon に emitter が無い。parsing / coordinator unit test のみ）。
@@ -151,7 +150,7 @@
 | TASK-000 | `android/` `daemon/` `relay/` `protocol/` `docs/` の module boundary、format / lint | リリース済み |
 | TASK-001 | Remote Protocol の Event / Command 型と JSON 境界 | リリース済み。v1.3.0 で `command` / `event` / `result` frame を追加 |
 
-Android は TASK-405 まで（Phase 4 完了）。Gate B / C は通過。Gate D は TASK-500 の将来 gate であり未通過。
+Android は TASK-405 までと debug-only TASK-500 を実装済み。Phase 4 は完了し、Gate B / C / D は通過。
 
 ### Phase 1 — Cursor CLI Local Core（Milestone 1）
 
@@ -189,7 +188,7 @@ Phase 2 の Chat は v1.7.0。Gate B は 2026-08-22 に通過。実機記録は 
 
 ### Phase 3 以降
 
-TASK-300 Permission Flow は **v1.8.0 で完了**。Gate C 通過。TASK-301 Diff Pipeline は **v1.9.0 で完了**。TASK-302 Cursor Response File Links は **v1.10.0 で完了**。TASK-303 Push Notifications は **v1.11.0 で完了**。Phase 3 はここまで。TASK-400 Dynamic Model Catalog は **v1.12.0 で完了**。TASK-401 Model Visibility は **v1.13.0 で完了**。TASK-402 Session Context Usage は **v1.14.0 で完了**。TASK-403 Context Breakdown は **v1.15.0 で完了**。TASK-404 Session Cost は **v1.16.0 で完了**。TASK-405 Account Usage capability は **v1.16.0 で dormant gate 完了**。Phase 4 はここまで。Phase 5 は進行中。v1.17.0 で debug-only 診断 harness をリリースしたが、TASK-500 は未完了。Gate D は未通過。TASK-501 / TASK-502 / TASK-503 は未着手。
+TASK-300 Permission Flow は **v1.8.0 で完了**。Gate C 通過。TASK-301 Diff Pipeline は **v1.9.0 で完了**。TASK-302 Cursor Response File Links は **v1.10.0 で完了**。TASK-303 Push Notifications は **v1.11.0 で完了**。Phase 3 はここまで。TASK-400 Dynamic Model Catalog は **v1.12.0 で完了**。TASK-401 Model Visibility は **v1.13.0 で完了**。TASK-402 Session Context Usage は **v1.14.0 で完了**。TASK-403 Context Breakdown は **v1.15.0 で完了**。TASK-404 Session Cost は **v1.16.0 で完了**。TASK-405 Account Usage capability は **v1.16.0 で dormant gate 完了**。Phase 4 はここまで。Phase 5 は進行中。v1.17.0 の debug-only 診断 harness を使い、2026-09-03 に TASK-500 を完了して Gate D を通過した。TASK-501 / TASK-502 / TASK-503 は未着手。
 
 ---
 
@@ -442,6 +441,7 @@ ACP `usage_update` の structured `breakdown` 配列を防御的に `session.con
 | `npm test` v1.16.0 | 成功 | protocol 19 / daemon 125 / relay 8、fail 0。`npm run lint` pass。targeted Prettier pass |
 | Gradle v1.16.0 | 成功 | `--no-daemon test assembleDebug lintDebug` 78 actionable tasks、debug unit 66 tests pass。`git diff --check` pass |
 | Android 実機 Session Cost / Account Usage（TASK-404 / 405） | 未実施 | ユーザー方針により実機検証なし。installed CLI `2026.08.11-e8db854` では `usage_update` 未観測 |
+| Android 実機 Audio Routing（TASK-500 / Gate D） | 通過（2026-09-03） | SM-S928Q / Android 16。`docs/android_audio_routing_report.md` |
 | Android 実機 Chat（Gate B） | 通過（2026-08-22） | SM-S928Q / Android 16。下記 |
 | Android 実機 Permission（Gate C） | 通過（2026-08-22） | SM-S928Q / Android 16。下記 |
 | Android 実機 Diff（TASK-301） | 受け入れ（2026-08-22） | SM-S928Q / Android 16。下記 |
@@ -462,12 +462,12 @@ TASK-303（2026-08-22、同端末）: localhost Relay と adb reverse。foregrou
 
 ## 9. モジュール別の現状
 
-| モジュール | 実装済み v1.16.0 | 未着手 |
+| モジュール | 実装済み v1.17.0 | 未着手 |
 | --- | --- | --- |
 | `protocol/` | Event / Command 型、Remote frame、Pairing 型・証明・QR payload、permission requested/resolved と permissionId のみの approve/reject、diff snapshot payload、`file.read` / FileContent payload、model catalog / select payload、`session.context_updated` used/size、breakdown categories payload、`session.usage_updated {cost}`。`agent.waiting` は既存共有型 | Android 向け追加画面用の型は不要な範囲で増やさない |
 | `daemon/` | ACP、Workspace、metadata、`remote-dev`、Relay outbound、`PairingManager`、device 永続化、PermissionBridge（fail-closed）、bounded Git DiffPipeline、session-bound `file.read`、ACP models / configOptions からの防御的 catalog と `session/set_config_option`、structured `usage_update` → `session.context_updated`、structured breakdown の防御的変換、valid `usage_update.cost` → `session.usage_updated` | pairing CLI、`agent.waiting` emitter |
 | `relay/` | WebSocket routing / correlation / heartbeat、`/client` の pairing ゲート。generic のまま | TLS |
-| `android/` | TASK-204 Chat（メモリ内）、TASK-300 Permission approval card、TASK-301 手動 Diff UI、TASK-302 応答内リンクと read-only Viewer、TASK-303 in-process 通知、TASK-400 Chat header Model Picker、TASK-401 Model Visibility / Manage Models、TASK-402 条件付き Context 表示、TASK-403 折りたたみ Context Breakdown 表示、TASK-404 独立 Usage / This session dialog | QR カメラ、履歴永続化 / 再接続復元、FCM / reconnect / deep link / Doze（TASK-604） |
+| `android/` | TASK-204 Chat（メモリ内）、TASK-300 Permission approval card、TASK-301 手動 Diff UI、TASK-302 応答内リンクと read-only Viewer、TASK-303 in-process 通知、TASK-400 Chat header Model Picker、TASK-401 Model Visibility / Manage Models、TASK-402 条件付き Context 表示、TASK-403 折りたたみ Context Breakdown 表示、TASK-404 独立 Usage / This session dialog、TASK-500 debug-only audio routing 診断 | QR カメラ、履歴永続化 / 再接続復元、FCM / reconnect / deep link / Doze（TASK-604）、TASK-501/502/503 |
 | `docs/` | 仕様、計画、ACP 実測、Local E2E、本ファイル | — |
 
 ---
@@ -477,7 +477,7 @@ TASK-303（2026-08-22、同端末）: localhost Relay と adb reverse。foregrou
 計画書と Gate を崩さない。
 
 ```text
-TASK-500 Android Audio Routing Spike
+TASK-501 Push-to-Talk Recorder
 ```
 
-Phase 4 は v1.16.0 で完了。Phase 5 は進行中。v1.17.0 で debug-only 診断 harness をリリースしたが、TASK-500 は未完了。Gate D は未通過。TASK-501 / TASK-502 / TASK-503 は未着手。Bluetooth playback と本体マイク routing の実機測定が残る。Camera / TLS / 履歴永続化 / 再接続復元 / FCM は未完。
+Phase 4 は v1.16.0 で完了。Phase 5 は進行中。TASK-500 と Gate D は 2026-09-03 に対象実機で完了した。次は TASK-501。TASK-502 / TASK-503、Camera / TLS / 履歴永続化 / 再接続復元 / FCM は未完。

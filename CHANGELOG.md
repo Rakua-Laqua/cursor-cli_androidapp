@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## [1.17.1] - 2026-09-03
+
+### 変更
+
+- パッケージ版 1.17.1、Android `versionCode` 31 / `versionName` 1.17.1。Protocol / Daemon / Relay / Android の実装コードおよび製品挙動は不変。本番 `AndroidManifest` と Chat にはマイク権限も音声入力 UI も含めない。設定変更と data migration は不要。次タスクは TASK-501（Push-to-Talk Recorder）。
+
+### ドキュメント
+
+- TASK-500（Android Audio Routing Spike）完了および Gate D 通過の記録。対象実機（Samsung SM-S928Q / Android 16、JBL Tour Pro 3）において、Bluetooth playback（MediaSession `PLAYING`、AudioFlinger `AUDIO_DEVICE_OUT_BLE_HEADSET` active）を継続したまま、本体マイク（`TYPE_BUILTIN_MIC`、id 22）への routing、`MODE_NORMAL` 維持、PCM サンプル到着（48640 frames）を確認した。測定記録は `docs/android_audio_routing_report.md`、計画と進捗を `docs/implementation_plan_grok_4.6.md` および `docs/implementation_status.md` に反映した。他端末での互換性確認は継続課題とし、TASK-501 / TASK-502 / TASK-503 は未着手のまま維持する。
+
+### テスト
+
+- `npm test` は protocol 19 / daemon 125 / relay 8、fail 0。`npm run lint` pass。targeted Prettier pass。
+
 ## [1.17.0] - 2026-08-24
 
 ### 追加
