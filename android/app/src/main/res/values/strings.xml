@@ -17,4 +17,10 @@
     <string name="session_usage_title">This session</string>
     <string name="session_usage_cost">Cost</string>
     <string name="session_usage_close">Close</string>
+    <string name="voice_action">Voice</string>
+    <string name="voice_listening">Listening</string>
+    <string name="voice_transcribing">Transcribing</string>
+    <string name="voice_cancel">Cancel</string>
+    <string name="voice_microphone">Microphone: %1$s</string>
+    <string name="voice_permission_denied">Microphone permission is required for voice input.</string>
 </resources>

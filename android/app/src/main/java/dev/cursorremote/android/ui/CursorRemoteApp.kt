@@ -100,6 +100,9 @@ fun CursorRemoteApp(viewModel: CursorRemoteViewModel) {
                             onToggleModelPicker = viewModel::toggleModelPicker,
                             onToggleManageModels = viewModel::toggleManageModels,
                             onSetModelHidden = viewModel::setModelHidden,
+                            onStartVoice = viewModel::startVoicePrompt,
+                            onFinishVoice = viewModel::finishVoicePrompt,
+                            onCancelVoice = viewModel::cancelVoicePrompt,
                         )
                     }
                 }

@@ -1,6 +1,6 @@
 {
   "name": "@cursor-remote/daemon",
-  "version": "1.17.1",
+  "version": "1.18.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -14,7 +14,7 @@
     "remote-dev": "node dist/cli/remote-dev.js"
   },
   "dependencies": {
-    "@cursor-remote/protocol": "1.17.1",
+    "@cursor-remote/protocol": "1.18.0",
     "ws": "8.21.3"
   }
 }

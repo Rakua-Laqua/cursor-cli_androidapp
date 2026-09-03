@@ -854,6 +854,10 @@ Hold / Tap mic
 
 自動送信しない。
 
+### 実施記録
+
+2026-09-04、v1.18.0 で TASK-501（Push-to-Talk Recorder）、TASK-502（STT Adapter）、TASK-503（Voice Prompt UX）を完了。`AndroidPushToTalkRecorder` で本体マイク優先の AudioRecord を起動し PCM ストリームを提供。`AndroidSpeechToTextEngine` で Android 13+ の SpeechRecognizer に外部 PCM を注入して音声認識。`VoicePromptController` で両者を調停し、ChatScreen に Voice ボタン、状態表示（Listening / Transcribing / マイク名 / エラー）、RECORD_AUDIO 権限要求、Ready 時の Draft 反映を追加。自動送信は行わない。Phase 5 完了。次は Phase 6 TASK-600。
+
 ---
 
 # Phase 6 — Reliability / Security

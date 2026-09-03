@@ -1,6 +1,6 @@
 {
   "name": "@cursor-remote/relay",
-  "version": "1.17.1",
+  "version": "1.18.0",
   "private": true,
   "type": "module",
   "main": "./dist/index.js",
@@ -10,7 +10,7 @@
     "test": "npm run build && node --test test/*.test.mjs"
   },
   "dependencies": {
-    "@cursor-remote/protocol": "1.17.1",
+    "@cursor-remote/protocol": "1.18.0",
     "ws": "8.21.3"
   },
   "devDependencies": {

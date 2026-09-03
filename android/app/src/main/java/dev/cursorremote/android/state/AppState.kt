@@ -22,6 +22,8 @@ import dev.cursorremote.android.data.protocol.WorkspaceInfo
 import dev.cursorremote.android.data.remote.RemoteConnectionState
 import dev.cursorremote.android.data.remote.RemoteRepository
 import dev.cursorremote.android.data.transport.ConnectionState
+import dev.cursorremote.android.voice.VoicePromptController
+import dev.cursorremote.android.voice.VoicePromptState
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -94,6 +96,7 @@ data class CursorRemoteUiState(
     val sessionContextUsage: SessionContextUsage? = null,
     val sessionContextBreakdown: List<SessionContextBreakdownCategory>? = null,
     val sessionUsage: SessionUsage? = null,
+    val voice: VoicePromptState = VoicePromptState(),
 ) {
     val pickerModels: List<ModelCatalogEntry>
         get() = modelCatalog.filter { it.available && it.id !in hiddenModelIds }
@@ -105,6 +108,7 @@ class CursorRemoteViewModel(
     private val remoteRepository: RemoteRepository,
     coroutineScope: CoroutineScope? = null,
     private val nowMillis: () -> Long = { System.currentTimeMillis() },
+    private val voicePromptController: VoicePromptController? = null,
 ) : ViewModel() {
     private val scope = coroutineScope ?: viewModelScope
     private val _uiState = MutableStateFlow(CursorRemoteUiState())
@@ -141,6 +145,26 @@ class CursorRemoteViewModel(
                 applySessionContextEvent(event)
             }
         }
+        val voiceController = voicePromptController
+        if (voiceController != null) {
+            scope.launch {
+                voiceController.state.collect { voice ->
+                    _uiState.update { it.copy(voice = voice) }
+                }
+            }
+        }
+    }
+
+    fun startVoicePrompt() {
+        voicePromptController?.start()
+    }
+
+    fun finishVoicePrompt() {
+        voicePromptController?.finish()
+    }
+
+    fun cancelVoicePrompt() {
+        voicePromptController?.cancel()
     }
 
     fun selectMachine(machineId: String?) {
@@ -420,6 +444,7 @@ class CursorRemoteViewModel(
         }
 
     override fun onCleared() {
+        voicePromptController?.close()
         remoteRepository.disconnect()
         super.onCleared()
     }

@@ -1,5 +1,9 @@
 package dev.cursorremote.android.ui
 
+import android.Manifest
+import android.content.pm.PackageManager
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -21,6 +25,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -28,6 +33,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
@@ -45,6 +51,7 @@ import dev.cursorremote.android.state.ChatMessage
 import dev.cursorremote.android.state.ChatRole
 import dev.cursorremote.android.state.CursorRemoteUiState
 import dev.cursorremote.android.state.PendingPermission
+import dev.cursorremote.android.voice.VoicePromptPhase
 
 @Composable
 fun ChatScreen(
@@ -62,10 +69,35 @@ fun ChatScreen(
     onToggleModelPicker: () -> Unit,
     onToggleManageModels: () -> Unit,
     onSetModelHidden: (modelId: String, hidden: Boolean) -> Unit,
+    onStartVoice: () -> Unit,
+    onFinishVoice: () -> Unit,
+    onCancelVoice: () -> Unit,
 ) {
     var draft by rememberSaveable { mutableStateOf("") }
     var contextExpanded by rememberSaveable { mutableStateOf(false) }
     var usageDialogVisible by rememberSaveable(uiState.selectedSessionId) { mutableStateOf(false) }
+    var permissionDenied by rememberSaveable { mutableStateOf(false) }
+    val context = LocalContext.current
+    val voice = uiState.voice
+    val voiceBusy =
+        voice.phase == VoicePromptPhase.Preparing ||
+            voice.phase == VoicePromptPhase.Listening ||
+            voice.phase == VoicePromptPhase.Transcribing
+    val permissionLauncher =
+        rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
+            permissionDenied = !granted
+            if (granted) {
+                onStartVoice()
+            }
+        }
+    DisposableEffect(Unit) {
+        onDispose { onCancelVoice() }
+    }
+    LaunchedEffect(voice.phase) {
+        if (voice.phase == VoicePromptPhase.Ready && voice.transcript.isNotEmpty()) {
+            draft = voice.transcript
+        }
+    }
     val listState = rememberLazyListState()
     val lastMessage = uiState.chatMessages.lastOrNull()
     LaunchedEffect(uiState.chatMessages.size, lastMessage?.id, lastMessage?.text) {
@@ -131,12 +163,35 @@ fun ChatScreen(
         uiState.pendingPermission?.let { pending ->
             ApprovalCard(pending = pending, onApprove = onApprove, onReject = onReject)
         }
+        when (voice.phase) {
+            VoicePromptPhase.Preparing, VoicePromptPhase.Listening -> {
+                Text(stringResource(R.string.voice_listening))
+                voice.routedMicrophoneName?.let { name ->
+                    Text(stringResource(R.string.voice_microphone, name))
+                }
+            }
+            VoicePromptPhase.Transcribing -> {
+                Text(stringResource(R.string.voice_transcribing))
+                voice.routedMicrophoneName?.let { name ->
+                    Text(stringResource(R.string.voice_microphone, name))
+                }
+            }
+            VoicePromptPhase.Error ->
+                voice.errorMessage?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+            VoicePromptPhase.Idle, VoicePromptPhase.Ready -> Unit
+        }
+        if (permissionDenied) {
+            Text(
+                stringResource(R.string.voice_permission_denied),
+                color = MaterialTheme.colorScheme.error,
+            )
+        }
         OutlinedTextField(
             value = draft,
             onValueChange = { draft = it },
             modifier = Modifier.fillMaxWidth().heightIn(min = 72.dp),
             label = { Text("Prompt") },
-            enabled = !uiState.isSending,
+            enabled = !uiState.isSending && !voiceBusy,
         )
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(
@@ -146,12 +201,38 @@ fun ChatScreen(
                     onSend(text)
                     draft = ""
                 },
-                enabled = !uiState.isSending && uiState.selectedSessionId != null && draft.isNotBlank(),
+                enabled = !uiState.isSending && uiState.selectedSessionId != null && draft.isNotBlank() && !voiceBusy,
             ) { Text("Send") }
             Button(
                 onClick = onStop,
                 enabled = uiState.isSending && !uiState.isStopping,
             ) { Text("Stop") }
+            Button(
+                onClick = {
+                    when (voice.phase) {
+                        VoicePromptPhase.Idle, VoicePromptPhase.Ready, VoicePromptPhase.Error -> {
+                            if (context.checkSelfPermission(Manifest.permission.RECORD_AUDIO) ==
+                                PackageManager.PERMISSION_GRANTED
+                            ) {
+                                permissionDenied = false
+                                onStartVoice()
+                            } else {
+                                permissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                            }
+                        }
+                        VoicePromptPhase.Listening -> onFinishVoice()
+                        VoicePromptPhase.Preparing, VoicePromptPhase.Transcribing -> Unit
+                    }
+                },
+                enabled = !uiState.isSending && (!voiceBusy || voice.phase == VoicePromptPhase.Listening),
+            ) { Text(stringResource(R.string.voice_action)) }
+            if (
+                voice.phase == VoicePromptPhase.Preparing ||
+                voice.phase == VoicePromptPhase.Listening ||
+                voice.phase == VoicePromptPhase.Transcribing
+            ) {
+                Button(onClick = onCancelVoice) { Text(stringResource(R.string.voice_cancel)) }
+            }
         }
     }
 }

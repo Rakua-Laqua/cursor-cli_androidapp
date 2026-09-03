@@ -1,5 +1,27 @@
 # CHANGELOG
 
+## [1.18.0] - 2026-09-04
+
+### 追加
+
+- Chat 画面の音声入力操作（Voice / Stop / Cancel ボタン）。Prompt 入力欄の操作列に `Voice` ボタンを追加した。アイドル時はタップで録音準備・開始、録音中（`Listening`）は再度タップで録音終了し文字起こし（`Transcribing`）へ移行する。録音準備・録音中・文字起こし中は `Cancel` ボタンを表示し、いつでも処理を破棄してアイドルへ戻せる。
+- 音声入力中のリアルタイム状態表示とマイク表示。音声処理の進行に応じて `Listening`（録音中）や `Transcribing`（文字起こし中）のインジケータを表示する。また、現在音声入力に使用されている実際のルーティング済みマイクの製品名（`Microphone: %1$s`）を画面上に表示する。エラー発生時はエラーメッセージを表示する。
+- マイク権限のランタイム要求と拒否時ハンドリング。`Voice` ボタン押下時に `RECORD_AUDIO` 権限状態を確認し、未許可の場合はシステム権限ダイアログを要求する。ユーザーが権限を拒否した場合はエラーメッセージ（`Microphone permission is required for voice input.`）を表示し、録音は開始しない。
+- 文字起こし結果の Prompt 入力欄への反映と誤送信防止。音声認識が成功（`Ready`）した際、文字起こしテキストの前後の空白をトリムして Prompt 入力欄（Draft）に自動反映する。自動送信は行わず、ユーザーが手動で内容を確認・編集した上で Send ボタンを押して送信する。
+- 音声処理中の排他制御と画面離脱時の自動キャンセル。録音準備（`Preparing`）、録音中（`Listening`）、文字起こし中（`Transcribing`）は、Prompt 入力欄（OutlinedTextField）および Send ボタンを無効化（`voiceBusy`）して誤操作や競合を防止する。また、画面破棄時（`DisposableEffect` の `onDispose`）に進行中の録音・音声認識を自動キャンセルし、バックグラウンドでのマイク保持を防止する。
+- 本体マイク優先の Push-to-Talk 録音基盤（TASK-501）。`AndroidPushToTalkRecorder` を追加した。`AudioRecord` を `VOICE_RECOGNITION`、16 kHz、mono、16-bit PCM で初期化し、`AudioRoutePolicy` に基づき本体マイク（`TYPE_BUILTIN_MIC`）を優先デバイスに指定（`setPreferredDevice`）する。実際の routed device が本体マイクでない場合は fail-closed で録音を停止しエラーとする。Bluetooth イヤホン接続時でも通話用オーディオモード（Bluetooth SCO）へ切り替えず、メディア再生を妨げない。
+- 外部 PCM 注入型 Speech-to-Text アダプタ（TASK-502）。`AndroidSpeechToTextEngine` を追加した。Android 13（API 33）以上の `SpeechRecognizer` の外部オーディオソース注入機能（`EXTRA_AUDIO_SOURCE` / `EXTRA_SEGMENTED_SESSION`）に対応し、`ParcelFileDescriptor` パイプ経由で PCM チャンクをストリーミングする。on-device 音声認識（`createOnDeviceSpeechRecognizer`）を優先し、利用不可時は通常の `createSpeechRecognizer` を使用する。15 秒のタイムアウト保護とリソース解放を備え、Android 13 未満の環境では fail-closed でエラーを返す。
+- 音声入力オーケストレーション（TASK-503）。`VoicePromptController` を追加した。レコーダーと STT エンジンの協調動作を調停し、セッション番号による非同期競合制御を行う。キャンセル後の遅延 PCM チャンクや古い認識結果を破棄し、各種エラーや例外を捕捉して `Error` 状態へ遷移させ、リソース（マイク・パイプ・認識器）を確実に破棄する。
+
+### 変更
+
+- パッケージ版 1.18.0、Android `versionCode` 32 / `versionName` 1.18.0。`AndroidManifest.xml` に `RECORD_AUDIO` 権限と `android.speech.RecognitionService` の queries を追加した。`AppContainer` にレコーダー・STT・コントローラーの生成を追加し ViewModel へ注入した。
+- Remote Protocol、Local Daemon、Relay の公開挙動および実装コードは不変。設定変更や data migration は不要（Room データベースのスキーマ変更なし）。音声入力マイク設定（自動 / Bluetooth 機器切替）は未実装で本体マイク固定。Phase 5（Voice Input）が完了し、次タスクは Phase 6 TASK-600（Event Replay / Reconnect）。
+
+### テスト
+
+- `npm test` は protocol 19 / daemon 125 / relay 8、fail 0。`npm run lint` pass。targeted Prettier pass。`VoicePromptControllerTest` で PCM 転送、トリム、キャンセル、エラー処理、二重開始/停止の防止、破棄、非同期録音エラー、例外処理、遅延 PCM の破棄を検証した。
+
 ## [1.17.1] - 2026-09-03
 
 ### 変更

@@ -17,6 +17,9 @@ import dev.cursorremote.android.notify.ScheduleAfter
 import dev.cursorremote.android.notify.ScheduledNotification
 import dev.cursorremote.android.notify.SystemNotificationPoster
 import dev.cursorremote.android.state.CursorRemoteViewModel
+import dev.cursorremote.android.voice.AndroidPushToTalkRecorder
+import dev.cursorremote.android.voice.AndroidSpeechToTextEngine
+import dev.cursorremote.android.voice.VoicePromptController
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -58,10 +61,18 @@ class AppContainer(context: Context) {
                 },
         )
 
+    private val appContext = context.applicationContext
+
     val viewModelFactory: CursorRemoteViewModelFactory =
         CursorRemoteViewModelFactory(
             database = database,
             remoteRepository = remoteRepository,
+            voicePromptControllerFactory = {
+                VoicePromptController(
+                    recorder = AndroidPushToTalkRecorder(appContext),
+                    engine = AndroidSpeechToTextEngine(appContext),
+                )
+            },
         )
 
     init {
@@ -85,6 +96,7 @@ class AppContainer(context: Context) {
 class CursorRemoteViewModelFactory(
     private val database: CursorRemoteDatabase,
     private val remoteRepository: RemoteRepository,
+    private val voicePromptControllerFactory: () -> VoicePromptController,
 ) : ViewModelProvider.Factory {
     @Suppress("UNCHECKED_CAST")
     override fun <T : ViewModel> create(modelClass: Class<T>): T {
@@ -95,6 +107,7 @@ class CursorRemoteViewModelFactory(
             machineDao = database.machineDao(),
             hiddenModelDao = database.hiddenModelDao(),
             remoteRepository = remoteRepository,
+            voicePromptController = voicePromptControllerFactory(),
         ) as T
     }
 }
