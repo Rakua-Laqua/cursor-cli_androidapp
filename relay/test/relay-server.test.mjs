@@ -582,3 +582,76 @@ test('replacement machine supersedes the old socket and receives later commands'
   assert.equal(result.result.ok, true);
   assert.deepEqual(result.result.value, []);
 });
+
+test('unauthenticated sync.catch_up is gated and replay results stay unicast', async (t) => {
+  const server = await listen();
+  t.after(() => server.close());
+  const machine = await openCollected(server.machineUrl('m1'));
+  const clientA = await openCollected(server.clientUrl('m1'));
+  const clientB = await openCollected(server.clientUrl('m1'));
+  t.after(() => Promise.all([machine, clientA, clientB].map((item) => closeWs(item.socket))));
+
+  const unpairedCommand = makeCommand('sync.catch_up', { lastEventId: null }, 'sync-unauth');
+  sendCommand(clientA.socket, unpairedCommand);
+  const unpaired = await waitForResult(clientA.frames, unpairedCommand.requestId);
+  assert.equal(unpaired.result.ok, false);
+  assert.match(unpaired.result.error, /Device is not paired/);
+  await waitQuiet();
+  assert.equal(machineCommands(machine.frames).length, 0);
+
+  await authenticateClient(clientA.socket, clientA.frames, machine.socket, machine.frames, 'dev-a');
+  await authenticateClient(clientB.socket, clientB.frames, machine.socket, machine.frames, 'dev-b');
+
+  const catchUp = makeCommand('sync.catch_up', { lastEventId: 'evt-1' }, 'sync-auth');
+  catchUp.sessionId = 'sess-1';
+  sendCommand(clientA.socket, catchUp);
+  await waitUntil(() =>
+    machineCommands(machine.frames).some((command) => command.requestId === 'sync-auth'),
+  );
+  sendResult(
+    machine.socket,
+    remoteCommandSuccess('sync-auth', {
+      status: 'replayed',
+      events: [
+        {
+          eventId: 'evt-2',
+          sessionId: 'sess-1',
+          timestamp: new Date().toISOString(),
+          type: 'assistant.message',
+          payload: { text: 'replay', delta: true },
+        },
+      ],
+      headEventId: 'evt-2',
+      pendingPermission: null,
+    }),
+  );
+  const replay = await waitForResult(clientA.frames, 'sync-auth');
+  assert.equal(replay.result.ok, true);
+  assert.equal(replay.result.value.status, 'replayed');
+  await waitQuiet();
+  assert.equal(
+    clientB.frames.some(
+      (frame) => frame.kind === 'result' && frame.result.requestId === 'sync-auth',
+    ),
+    false,
+  );
+  assert.equal(
+    clientB.frames.some((frame) => frame.kind === 'event' && frame.event.eventId === 'evt-2'),
+    false,
+  );
+
+  sendEvent(machine.socket, {
+    eventId: 'evt-live',
+    sessionId: 'sess-1',
+    timestamp: new Date().toISOString(),
+    type: 'assistant.message',
+    payload: { text: 'live', delta: true },
+  });
+  await waitUntil(
+    () =>
+      clientA.frames.some(
+        (frame) => frame.kind === 'event' && frame.event.eventId === 'evt-live',
+      ) &&
+      clientB.frames.some((frame) => frame.kind === 'event' && frame.event.eventId === 'evt-live'),
+  );
+});

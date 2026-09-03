@@ -1,5 +1,21 @@
 # CHANGELOG
 
+## [1.19.0] - 2026-09-04
+
+### 追加
+
+- 認証後の `sync.catch_up`。Android は保持中の `lastEventId`（無ければ null）と現在 Session を送り、Daemon はプロセス内の bounded EventLog（最大 2048 件 / 2 MiB）から strictly-after の replay、または未知・追い出し済み cursor の `gap` を返す。pending permission の snapshot は catch-up 結果を正とする。`lastEventId=null` は返ってきた head を基準にするだけで、過去本文は返さない。
+- Android の明示フォアグラウンド Reconnect。Machine ごとの process メモリ cursor と最大 4096 件の eventId 重複排除、replay 完了前の live バッファ、溢れたときの安全な接続失敗。gap では選択中 Workspace / Session とメモリ内 Chat を残したまま状態 resync と警告を出し、`session.load` / `session.send` / `session.cancel` は自動で再送しない。
+- Daemon の Relay outbound は、想定外切断のあと 250 ms〜10 s の bounded exponential backoff で再接続し、EventLog は維持する。実行中コマンドは再送しない。明示 `close()` と `1000 / Machine replaced` ではその接続の再試行を止める。Relay は stateless のまま認証ゲートし、replay 結果は要求元へ unicast する。
+
+### 変更
+
+- パッケージ版 1.19.0、Android `versionCode` 33 / `versionName` 1.19.0。依存関係・設定・Room schema / data migration は不要。これは process メモリ上のフォアグラウンド復旧だけである。Chat 履歴の永続化、process 死亡後の復元、Android バックグラウンド WebSocket 再接続、FCM / deep link / Doze は TASK-604 以降。Daemon 再起動復旧は次の TASK-601。TLS / インターネット公開は未対応。Phase 6 は進行中。
+
+### テスト
+
+- `npm test` は protocol 20 / daemon 136 / relay 9、fail 0。`npm run lint` pass。targeted Prettier pass。Android `testDebugUnitTest` / `assembleDebug` / `lintDebug` pass（92 unit tests、fail 0）。TASK-600 の実機検証は未実施。
+
 ## [1.18.0] - 2026-09-04
 
 ### 追加

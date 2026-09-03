@@ -31,11 +31,21 @@ export interface PermissionBridgeOptions {
 interface PendingPermission {
   readonly permissionId: string;
   readonly remoteSessionId: string;
+  readonly kind: string;
+  readonly command: string;
+  readonly risk: 'high';
   readonly allowOnceOptionId: string;
   readonly rejectOnceOptionId: string;
   readonly resolve: (value: unknown) => void;
   readonly timer: ReturnType<typeof setTimeout>;
   settled: boolean;
+}
+
+export interface PendingPermissionSnapshot {
+  readonly permissionId: string;
+  readonly kind: string;
+  readonly command: string;
+  readonly risk: 'high';
 }
 
 const ALLOW_ONCE_KIND = 'allow_once';
@@ -85,6 +95,9 @@ export class PermissionBridge {
       const pending: PendingPermission = {
         permissionId,
         remoteSessionId: sessionId,
+        kind,
+        command,
+        risk: 'high',
         allowOnceOptionId,
         rejectOnceOptionId,
         resolve,
@@ -126,6 +139,19 @@ export class PermissionBridge {
     for (const pending of [...this.pendingById.values()]) {
       this.settle(pending, 'rejected');
     }
+  }
+
+  getPendingSnapshot(remoteSessionId: string): PendingPermissionSnapshot | null {
+    const pending = this.pendingBySession.get(remoteSessionId);
+    if (pending === undefined) {
+      return null;
+    }
+    return {
+      permissionId: pending.permissionId,
+      kind: pending.kind,
+      command: pending.command,
+      risk: pending.risk,
+    };
   }
 
   private decide(

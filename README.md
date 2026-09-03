@@ -4,8 +4,8 @@ Android から PC 上の Cursor CLI / ACP セッションを操作するため�
 
 ## Repository layout
 
-- `android/` — Android ネイティブクライアント。v1.16.0 までの Workspace / Session / メモリ内 Chat、Permission approval、手動 Diff、応答内ファイルリンクと read-only Viewer、in-process 通知、Chat header の動的 Model Picker と Model Visibility、valid Context 表示、structured breakdown の条件付き内訳、valid Session Cost の独立 Usage。v1.17.0 は debug-only の audio routing 診断を追加（操作と証拠の扱いは `docs/android_audio_routing_report.md`）。v1.18.0 は Push-to-Talk 音声入力を追加（Chat 画面からの本体マイク録音・Android 13+ SpeechRecognizer による文字起こし・Prompt 反映）。QR カメラと TLS は未完です。
-- `daemon/` — PC 上で動作する Local Daemon。Phase 1 の ACP / Workspace / Session / metadata と、簡易クライアント `remote-dev`、Relay outbound、Device Pairing バックエンドを含みます。
+- `android/` — Android ネイティブクライアント。v1.16.0 までの Workspace / Session / メモリ内 Chat、Permission approval、手動 Diff、応答内ファイルリンクと read-only Viewer、in-process 通知、Chat header の動的 Model Picker と Model Visibility、valid Context 表示、structured breakdown の条件付き内訳、valid Session Cost の独立 Usage。v1.17.0 は debug-only の audio routing 診断を追加（操作と証拠の扱いは `docs/android_audio_routing_report.md`）。v1.18.0 は Push-to-Talk 音声入力を追加（Chat 画面からの本体マイク録音・Android 13+ SpeechRecognizer による文字起こし・Prompt 反映）。v1.19.0 は同一プロセス内のフォアグラウンド Event Replay / Reconnect を追加する。永続履歴とバックグラウンド復旧は含まない。QR カメラと TLS は未完です。
+- `daemon/` — PC 上で動作する Local Daemon。Phase 1 の ACP / Workspace / Session / metadata と、簡易クライアント `remote-dev`、Relay outbound（想定外切断後の bounded 再接続）、Device Pairing バックエンドを含みます。
 - `relay/` — Android と Daemon を中継する Relay Server。v1.4.0 で localhost WebSocket core と `/client` 認証ゲートを持ちます。
 - `protocol/` — Android 向け Remote Protocol の共有 TypeScript 型と安全な JSON 境界処理です。
 - `docs/` — 仕様書、実装計画、進捗スナップショット、Capability 実測結果、Local E2E 確認記録を保持します。
@@ -69,10 +69,10 @@ cd android
 gradle :app:assembleDebug :app:testDebugUnitTest
 ```
 
-開始画面は Machines です。Pairing JSON または既存 Machine 再認証の成功時だけ Workspaces / Sessions / Chat へ進みます。Chat は選択中 Session への Prompt と逐次応答（メモリ内）。Permission は approval card。Refresh Diff は選択中の登録済み Workspace の変更一覧・+/-・折りたたみ・unified diff・横スクロールで、Git fallback かつ手動更新のみです。Assistant 応答内の workspace 相対パスはリンクになり、Chat 内の read-only Viewer で開きます。アプリが background で process と既存 WebSocket が生存中だけ in-process 通知します。Chat header の Model Picker は選択中 Session の動的 catalog です。Manage Models で表示/非表示を端末内に保存します。v1.18.0 で Push-to-Talk 音声入力（本体マイク録音、Android 13+ SpeechRecognizer による文字起こし、Prompt 編集反映）に対応しました。QR カメラ、TLS、履歴永続化 / 再接続復元は未完です。詳細は `docs/implementation_status.md`。
+開始画面は Machines です。Pairing JSON または既存 Machine 再認証の成功時だけ Workspaces / Sessions / Chat へ進みます。Chat は選択中 Session への Prompt と逐次応答（メモリ内）。Permission は approval card。Refresh Diff は選択中の登録済み Workspace の変更一覧・+/-・折りたたみ・unified diff・横スクロールで、Git fallback かつ手動更新のみです。Assistant 応答内の workspace 相対パスはリンクになり、Chat 内の read-only Viewer で開きます。アプリが background で process と既存 WebSocket が生存中だけ in-process 通知します。Chat header の Model Picker は選択中 Session の動的 catalog です。Manage Models で表示/非表示を端末内に保存します。v1.18.0 で Push-to-Talk 音声入力（本体マイク録音、Android 13+ SpeechRecognizer による文字起こし、Prompt 編集反映）に対応しました。v1.19.0 で同一プロセス内の明示フォアグラウンド Reconnect と event replay に対応します。永続履歴とバックグラウンド復旧は未完です。QR カメラ、TLS は未完です。詳細は `docs/implementation_status.md`。
 
 ## Phase boundary
 
 Phase 1 の Local Daemon / ACP / Workspace / Session / metadata / Local E2E は `remote-dev` で固定します。実機の Cursor CLI / ACP Capability は `docs/acp_capability_report.md`、TASK-105 の一連確認は `docs/local_e2e_report.md` に記録済みです。未観測の機能を存在する前提で実装しないという拘束は維持します。
 
-Phase 2 は TASK-200〜204（v1.3.0〜v1.7.1）で Gate B 通過。Phase 3 の TASK-300〜303 は v1.8.0〜v1.11.0 で完了（TASK-300 は Gate C 通過）。Phase 4 の TASK-400〜405 は v1.12.0〜v1.16.0 で完了（Session Cost は v1.16.0。Account Usage は公式安定 interface が無く dormant）。Phase 5 の TASK-500〜503 は v1.18.0 で完了（Gate D 通過、Push-to-Talk Recorder、STT Adapter、Voice Prompt UX）。次は Phase 6。QR カメラ、TLS、履歴永続化 / 再接続復元、FCM は未完です。詳細は `CHANGELOG.md` と `docs/implementation_status.md` です。
+Phase 2 は TASK-200〜204（v1.3.0〜v1.7.1）で Gate B 通過。Phase 3 の TASK-300〜303 は v1.8.0〜v1.11.0 で完了（TASK-300 は Gate C 通過）。Phase 4 の TASK-400〜405 は v1.12.0〜v1.16.0 で完了（Session Cost は v1.16.0。Account Usage は公式安定 interface が無く dormant）。Phase 5 の TASK-500〜503 は v1.18.0 で完了（Gate D 通過、Push-to-Talk Recorder、STT Adapter、Voice Prompt UX）。Phase 6 は進行中。TASK-600 は v1.19.0 で完了し、次は TASK-601。QR カメラ、TLS、Chat 履歴の永続化、バックグラウンド復旧、FCM は未完です。詳細は `CHANGELOG.md` と `docs/implementation_status.md` です。

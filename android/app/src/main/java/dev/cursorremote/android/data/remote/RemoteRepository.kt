@@ -10,11 +10,14 @@ import dev.cursorremote.android.data.protocol.RemoteCommandResult
 import dev.cursorremote.android.data.protocol.RemoteEvent
 import dev.cursorremote.android.data.protocol.RemoteProtocol
 import dev.cursorremote.android.data.protocol.SessionInfo
+import dev.cursorremote.android.data.protocol.SyncCatchUpResult
 import dev.cursorremote.android.data.protocol.WorkspaceInfo
 import dev.cursorremote.android.data.security.DeviceCredentialStore
 import dev.cursorremote.android.data.transport.ConnectionState
 import dev.cursorremote.android.data.transport.WebSocketTransport
 import java.time.Instant
+import java.util.ArrayDeque
+import java.util.LinkedHashSet
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicLong
@@ -47,21 +50,34 @@ enum class RemoteConnectionState {
 
 class RemoteRepositoryException(message: String) : Exception(message)
 
+data class RemoteAuthResult(
+    val deviceId: String,
+    val catchUp: SyncCatchUpResult,
+)
+
 class RemoteRepository(
     private val transport: WebSocketTransport,
     private val credentialStore: DeviceCredentialStore,
     private val scope: CoroutineScope,
     private val requestTimeoutMs: Long = 15_000,
+    private val liveQueueLimit: Int = LIVE_EVENT_QUEUE_LIMIT,
     private val nowMillis: () -> Long = { System.currentTimeMillis() },
     private val nowTimestamp: () -> String = { Instant.ofEpochMilli(nowMillis()).toString() },
     private val newRequestId: () -> String = { UUID.randomUUID().toString() },
 ) {
     private val authMutex = Mutex()
+    private val eventLock = Any()
     private val activeGeneration = AtomicLong(-1L)
     private val pending = ConcurrentHashMap<String, CompletableDeferred<RemoteCommandResult>>()
     private val challengeDeferred = AtomicReference<CompletableDeferred<String>?>(null)
     private val _connectionState = MutableStateFlow(RemoteConnectionState.Disconnected)
     private val _events = MutableSharedFlow<RemoteEvent>(extraBufferCapacity = 64)
+    private val lastEventIdByMachine = HashMap<String, String>()
+    private val seenEventIdsByMachine = HashMap<String, LinkedHashSet<String>>()
+    private val liveQueue = ArrayDeque<RemoteEvent>()
+    private val currentMachineId = AtomicReference<String?>(null)
+    private var bufferingEvents = false
+    private var catchUpOverflowed = false
     val connectionState: StateFlow<RemoteConnectionState> = _connectionState.asStateFlow()
     val socketConnectionState: StateFlow<ConnectionState> = transport.connectionState
     val events: SharedFlow<RemoteEvent> = _events.asSharedFlow()
@@ -77,14 +93,22 @@ class RemoteRepository(
         }
     }
 
-    suspend fun pair(payload: PairingQrPayload): String =
-        authenticateInternal(payload.relayUrl, payload.machineId, payload.token, null)
+    suspend fun pair(payload: PairingQrPayload, sessionId: String? = null): String =
+        authenticateInternal(payload.relayUrl, payload.machineId, payload.token, null, sessionId).deviceId
 
     suspend fun authenticate(
         relayUrl: String,
         machineId: String,
         deviceId: String,
-    ): String = authenticateInternal(relayUrl, machineId, null, deviceId)
+        sessionId: String? = null,
+    ): String = authenticateInternal(relayUrl, machineId, null, deviceId, sessionId).deviceId
+
+    suspend fun reconnect(
+        relayUrl: String,
+        machineId: String,
+        deviceId: String,
+        sessionId: String?,
+    ): RemoteAuthResult = authenticateInternal(relayUrl, machineId, null, deviceId, sessionId)
 
     suspend fun listWorkspaces(): List<WorkspaceInfo> =
         RemoteProtocol.parseWorkspaceList(sendCommand("workspace.list", RemoteProtocol.workspaceListPayload()))
@@ -157,9 +181,16 @@ class RemoteRepository(
         machineId: String,
         token: String?,
         deviceId: String?,
-    ): String =
+        sessionId: String?,
+    ): RemoteAuthResult =
         authMutex.withLock {
             reset(RemoteConnectionState.Connecting, RemoteRepositoryException("Connection replaced"), disconnectSocket = false)
+            currentMachineId.set(machineId)
+            synchronized(eventLock) {
+                bufferingEvents = true
+                catchUpOverflowed = false
+                liveQueue.clear()
+            }
             val challenge = CompletableDeferred<String>()
             challengeDeferred.set(challenge)
             val expected = transport.generation + 1
@@ -200,6 +231,16 @@ class RemoteRepository(
                 }
                 if (activeGeneration.get() != expected ||
                     transport.connectionState.value != ConnectionState.Connected ||
+                    _connectionState.value != RemoteConnectionState.Authenticating
+                ) {
+                    val failed =
+                        _connectionState.value == RemoteConnectionState.Failed ||
+                            transport.connectionState.value == ConnectionState.Failed
+                    throw RemoteRepositoryException(if (failed) "Connection failed" else "Disconnected")
+                }
+                val catchUp = applyCatchUp(machineId, sessionId)
+                if (activeGeneration.get() != expected ||
+                    transport.connectionState.value != ConnectionState.Connected ||
                     !_connectionState.compareAndSet(RemoteConnectionState.Authenticating, RemoteConnectionState.Ready)
                 ) {
                     val failed =
@@ -207,7 +248,7 @@ class RemoteRepository(
                             transport.connectionState.value == ConnectionState.Failed
                     throw RemoteRepositoryException(if (failed) "Connection failed" else "Disconnected")
                 }
-                pairedDeviceId
+                RemoteAuthResult(pairedDeviceId, catchUp)
             } catch (error: CancellationException) {
                 reset(RemoteConnectionState.Disconnected, RemoteRepositoryException("Disconnected"), disconnectSocket = true)
                 throw error
@@ -219,6 +260,81 @@ class RemoteRepository(
                 throw if (error is RemoteRepositoryException) error else RemoteRepositoryException(message)
             }
         }
+
+    private suspend fun applyCatchUp(machineId: String, sessionId: String?): SyncCatchUpResult {
+        val requestedCursor = synchronized(eventLock) { lastEventIdByMachine[machineId] }
+        val catchUp =
+            try {
+                val value =
+                    sendCatchUpCommand(requestedCursor, sessionId)
+                        ?: throw RemoteRepositoryException("sync.catch_up value must be an object.")
+                RemoteProtocol.parseSyncCatchUpResult(value)
+            } catch (error: ProtocolParseError) {
+                throw RemoteRepositoryException(error.message ?: "sync.catch_up failed")
+            }
+        var appliedReplay = false
+        while (true) {
+            val batch =
+                synchronized(eventLock) {
+                    if (catchUpOverflowed) {
+                        throw RemoteRepositoryException(OVERFLOW_MESSAGE)
+                    }
+                    val next = ArrayList<RemoteEvent>()
+                    if (!appliedReplay) {
+                        if (requestedCursor == null) {
+                            setCursorLocked(machineId, catchUp.headEventId)
+                        } else {
+                            for (event in catchUp.events) {
+                                acceptLocked(machineId, event, next)
+                            }
+                            setCursorLocked(machineId, catchUp.headEventId)
+                        }
+                        appliedReplay = true
+                    }
+                    drainQueueLocked(machineId, next)
+                    next
+                }
+            for (event in batch) {
+                _events.emit(event)
+            }
+            val more =
+                synchronized(eventLock) {
+                    if (catchUpOverflowed) {
+                        throw RemoteRepositoryException(OVERFLOW_MESSAGE)
+                    }
+                    if (liveQueue.isEmpty()) {
+                        bufferingEvents = false
+                        false
+                    } else {
+                        true
+                    }
+                }
+            if (!more) {
+                break
+            }
+        }
+        return catchUp
+    }
+
+    private suspend fun sendCatchUpCommand(lastEventId: String?, sessionId: String?): JsonElement? {
+        if (_connectionState.value != RemoteConnectionState.Authenticating) {
+            throw RemoteRepositoryException("Not authenticated")
+        }
+        val requestId = newRequestId()
+        val deferred = CompletableDeferred<RemoteCommandResult>()
+        pending[requestId] = deferred
+        sendOrThrow(
+            requestId,
+            RemoteProtocol.encodeCommandFrame(
+                requestId,
+                "sync.catch_up",
+                RemoteProtocol.syncCatchUpPayload(lastEventId),
+                nowTimestamp(),
+                sessionId,
+            ),
+        )
+        return awaitRegistered(requestId, deferred, failAuthentication = true)
+    }
 
     private suspend fun sendCommand(
         type: String,
@@ -310,8 +426,83 @@ class RemoteRepository(
                 challengeDeferred.getAndSet(null)?.complete(frame.nonce)
             }
             is IncomingRemoteFrame.Result -> pending.remove(frame.result.requestId)?.complete(frame.result)
-            is IncomingRemoteFrame.Event -> _events.emit(frame.event)
+            is IncomingRemoteFrame.Event -> {
+                val machineId = currentMachineId.get() ?: return
+                val overflow: Boolean
+                val toEmit: RemoteEvent?
+                synchronized(eventLock) {
+                    if (bufferingEvents) {
+                        if (liveQueue.size >= liveQueueLimit) {
+                            catchUpOverflowed = true
+                            overflow = true
+                            toEmit = null
+                        } else {
+                            liveQueue.addLast(frame.event)
+                            overflow = false
+                            toEmit = null
+                        }
+                    } else {
+                        overflow = false
+                        toEmit = acceptLiveLocked(machineId, frame.event)
+                    }
+                }
+                if (overflow) {
+                    failConnection(OVERFLOW_MESSAGE)
+                    return
+                }
+                if (toEmit != null) {
+                    _events.emit(toEmit)
+                }
+            }
         }
+    }
+
+    private fun acceptLocked(
+        machineId: String,
+        event: RemoteEvent,
+        into: MutableList<RemoteEvent>,
+    ) {
+        if (!noteSeenLocked(machineId, event.eventId)) {
+            return
+        }
+        setCursorLocked(machineId, event.eventId)
+        into.add(event)
+    }
+
+    private fun acceptLiveLocked(machineId: String, event: RemoteEvent): RemoteEvent? {
+        if (!noteSeenLocked(machineId, event.eventId)) {
+            return null
+        }
+        setCursorLocked(machineId, event.eventId)
+        return event
+    }
+
+    private fun drainQueueLocked(machineId: String, into: MutableList<RemoteEvent>) {
+        while (liveQueue.isNotEmpty()) {
+            acceptLocked(machineId, liveQueue.removeFirst(), into)
+        }
+    }
+
+    private fun setCursorLocked(machineId: String, eventId: String?) {
+        if (eventId == null) {
+            lastEventIdByMachine.remove(machineId)
+        } else {
+            lastEventIdByMachine[machineId] = eventId
+        }
+    }
+
+    private fun noteSeenLocked(machineId: String, eventId: String): Boolean {
+        val seen = seenEventIdsByMachine.getOrPut(machineId) { LinkedHashSet() }
+        if (seen.contains(eventId)) {
+            return false
+        }
+        if (seen.size >= SEEN_EVENT_LIMIT) {
+            val oldest = seen.iterator()
+            oldest.next()
+            oldest.remove()
+        }
+        seen.add(eventId)
+        return true
     }
 
     private fun onSocketState(state: ConnectionState) {
@@ -327,6 +518,7 @@ class RemoteRepository(
         }
         failPending(RemoteRepositoryException(message))
         activeGeneration.set(-1L)
+        clearCatchUpBufferLocked()
         _connectionState.value = next
     }
 
@@ -340,10 +532,19 @@ class RemoteRepository(
         disconnectSocket: Boolean,
     ) {
         failPending(error)
+        clearCatchUpBufferLocked()
         _connectionState.value = next
         activeGeneration.set(-1L)
         if (disconnectSocket) {
             transport.disconnect()
+        }
+    }
+
+    private fun clearCatchUpBufferLocked() {
+        synchronized(eventLock) {
+            bufferingEvents = false
+            catchUpOverflowed = false
+            liveQueue.clear()
         }
     }
 
@@ -352,5 +553,11 @@ class RemoteRepository(
         val waiters = pending.values.toList()
         pending.clear()
         waiters.forEach { it.completeExceptionally(error) }
+    }
+
+    companion object {
+        private const val LIVE_EVENT_QUEUE_LIMIT = 2048
+        private const val SEEN_EVENT_LIMIT = 4096
+        private const val OVERFLOW_MESSAGE = "Event buffer overflow"
     }
 }

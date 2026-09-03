@@ -13,8 +13,8 @@ android {
         applicationId = "dev.cursorremote.android"
         minSdk = 26
         targetSdk = 35
-        versionCode = 32
-        versionName = "1.18.0"
+        versionCode = 33
+        versionName = "1.19.0"
 
     }
 

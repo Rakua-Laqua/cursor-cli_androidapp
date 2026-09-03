@@ -691,3 +691,96 @@ test('TASK-402 usage_update correlates to the remote session and omits cost', as
     assert.deepEqual(usageUpdated[0].payload, { cost: { amount: 0.25, currency: 'USD' } });
   });
 });
+
+function catchUpCommand(sessionId, lastEventId, requestId = 'req-catch-up') {
+  return parseRemoteCommand(
+    serializeCommand({
+      requestId,
+      sessionId,
+      timestamp: new Date().toISOString(),
+      type: 'sync.catch_up',
+      payload: { lastEventId },
+    }),
+  );
+}
+
+test('catch-up replays after cursor, gaps on miss, and keeps session lastEventId', async () => {
+  const workspacePath = makeWorkspace();
+  await withDaemon(async (daemon) => {
+    const events = [];
+    daemon.onEvent((event) => events.push(event));
+    const { created } = await createIdleSession(daemon, workspacePath);
+    const head = events.at(-1).eventId;
+    const empty = await daemon.handleCommand(catchUpCommand(created.remoteSessionId, null));
+    assert.equal(empty.status, 'replayed');
+    assert.deepEqual(empty.events, []);
+    assert.equal(empty.headEventId, head);
+    assert.equal(empty.pendingPermission, null);
+
+    const atHead = await daemon.handleCommand(catchUpCommand(created.remoteSessionId, head));
+    assert.equal(atHead.status, 'replayed');
+    assert.deepEqual(atHead.events, []);
+
+    const firstId = events[0].eventId;
+    const afterFirst = await daemon.handleCommand(catchUpCommand(created.remoteSessionId, firstId));
+    assert.equal(afterFirst.status, 'replayed');
+    assert.deepEqual(
+      afterFirst.events.map((event) => event.eventId),
+      events.slice(1).map((event) => event.eventId),
+    );
+
+    const gap = await daemon.handleCommand(
+      catchUpCommand(created.remoteSessionId, 'missing-cursor'),
+    );
+    assert.equal(gap.status, 'gap');
+    assert.deepEqual(gap.events, []);
+    assert.equal(gap.headEventId, head);
+
+    const before = events.length;
+    await daemon.sessions.send(created.remoteSessionId, 'hello');
+    assert.ok(events.length > before);
+    const afterSend = await daemon.handleCommand(catchUpCommand(created.remoteSessionId, head));
+    assert.equal(afterSend.status, 'replayed');
+    assert.ok(afterSend.events.some((event) => event.type === 'assistant.message'));
+    assert.equal(afterSend.headEventId, events.at(-1).eventId);
+    assert.equal(
+      afterSend.events.some((event) => event.type === 'session.loaded'),
+      false,
+    );
+  });
+});
+
+test('catch-up returns pending permission snapshot without session.load or prompt', async () => {
+  const workspacePath = makeWorkspace();
+  await withDaemon(async (daemon) => {
+    const events = collectEvents(daemon);
+    const { created } = await createIdleSession(daemon, workspacePath);
+    const sending = daemon.sessions.send(created.remoteSessionId, 'ASK_PERMISSION');
+    const requested = await waitForPermissionRequested(events);
+    const loadedBefore = events.filter((event) => event.type === 'session.loaded').length;
+    const catchUp = await daemon.handleCommand(catchUpCommand(created.remoteSessionId, null));
+    assert.equal(catchUp.status, 'replayed');
+    assert.deepEqual(catchUp.events, []);
+    assert.deepEqual(catchUp.pendingPermission, {
+      permissionId: requested.payload.permissionId,
+      kind: requested.payload.kind,
+      command: requested.payload.command,
+      risk: 'high',
+    });
+    assert.equal(events.filter((event) => event.type === 'session.loaded').length, loadedBefore);
+    const none = await daemon.handleCommand(catchUpCommand(null, catchUp.headEventId));
+    assert.equal(none.pendingPermission, null);
+    await daemon.sessions.handleCommand(
+      permissionCommand(
+        'permission.reject',
+        created.remoteSessionId,
+        requested.payload.permissionId,
+      ),
+    );
+    await sending;
+    const settled = await daemon.handleCommand(
+      catchUpCommand(created.remoteSessionId, catchUp.headEventId),
+    );
+    assert.equal(settled.pendingPermission, null);
+  });
+});

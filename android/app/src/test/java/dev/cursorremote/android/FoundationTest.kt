@@ -20,6 +20,7 @@ import java.security.KeyPairGenerator
 import java.security.PublicKey
 import java.security.Signature
 import java.security.spec.ECGenParameterSpec
+import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -83,6 +84,7 @@ class FoundationTest {
             assertFalse(state.isSending)
             assertFalse(state.isStopping)
             assertNull(state.pendingPermission)
+            assertFalse(state.syncGapWarning)
             assertNull(state.diffSnapshot)
             assertFalse(state.diffLoading)
             assertNull(state.diffError)
@@ -980,6 +982,187 @@ class FoundationTest {
         }
     }
 
+    @Test
+    fun reconnectKeepsSelectionChatAndSkipsSessionLoad() {
+        withViewModel { viewModel, dao, transport ->
+            runBlocking {
+                dao.upsert(pairedMachine())
+                assertTrue(viewModel.connectExistingMachine("pc-1"))
+                assertTrue(viewModel.openWorkspace("ws-1"))
+                assertTrue(viewModel.resumeSession("sess-1"))
+                hangSessionSend(transport)
+                viewModel.sendPrompt("hello")
+                transport.emit(eventJson("assistant.message", "sess-1", """{"text":"Hi","delta":false}""", eventId = "evt-chat"))
+                assertEquals(listOf("hello", "Hi"), viewModel.uiState.value.chatMessages.map { it.text })
+                transport.emit(
+                    eventJson(
+                        "permission.requested",
+                        "sess-1",
+                        """{"permissionId":"perm-stale","kind":"execute","command":"ls","risk":"high"}""",
+                        eventId = "evt-perm",
+                    ),
+                )
+                assertEquals("perm-stale", viewModel.uiState.value.pendingPermission?.permissionId)
+                transport.fail()
+                assertEquals(RemoteConnectionState.Failed, viewModel.uiState.value.remoteConnection)
+                val loadsBefore = transport.sent.count { commandType(it) == "session.load" }
+                val helloSends = transport.sent.count { commandType(it) == "session.send" && it.contains("\"text\":\"hello\"") }
+                hangSessionSend(transport)
+                assertTrue(viewModel.reconnectSelectedMachine())
+                val after = viewModel.uiState.value
+                assertEquals("pc-1", after.selectedMachineId)
+                assertEquals("ws-1", after.selectedWorkspaceId)
+                assertEquals("sess-1", after.selectedSessionId)
+                assertEquals(listOf("hello", "Hi"), after.chatMessages.map { it.text })
+                assertEquals(RemoteConnectionState.Ready, after.remoteConnection)
+                assertFalse(after.syncGapWarning)
+                assertNull(after.pendingPermission)
+                assertEquals(loadsBefore, transport.sent.count { commandType(it) == "session.load" })
+                assertEquals(helloSends, transport.sent.count { commandType(it) == "session.send" && it.contains("\"text\":\"hello\"") })
+                assertEquals(true, lastCommand(transport, "sync.catch_up").contains("\"sessionId\":\"sess-1\""))
+            }
+        }
+    }
+
+    @Test
+    fun gapResyncKeepsChatSetsWarningAppliesPendingAndDoesNotLoadSession() {
+        withViewModel(autoRespond = false) { viewModel, dao, transport ->
+            runBlocking {
+                dao.upsert(pairedMachine())
+                transport.onSend = { text -> transport.emit(successBody(requestIdOf(text), text)) }
+                assertTrue(viewModel.connectExistingMachine("pc-1"))
+                assertTrue(viewModel.openWorkspace("ws-1"))
+                assertTrue(viewModel.resumeSession("sess-1"))
+                hangSessionSend(transport)
+                viewModel.sendPrompt("keep-me")
+                assertEquals("keep-me", viewModel.uiState.value.chatMessages.single().text)
+                transport.fail()
+                val loadsBefore = transport.sent.count { commandType(it) == "session.load" }
+                val sendsBefore = transport.sent.count { commandType(it) == "session.send" }
+                val cancelsBefore = transport.sent.count { commandType(it) == "session.cancel" }
+                transport.onSend = { text ->
+                    if (commandType(text) == "sync.catch_up") {
+                        transport.emit(
+                            resultJson(
+                                requestIdOf(text),
+                                ok = true,
+                                value =
+                                    """{"status":"gap","events":[],"headEventId":"evt-head","pendingPermission":{"permissionId":"perm-gap","kind":"execute","command":"ls","risk":"high"}}""",
+                            ),
+                        )
+                    } else {
+                        transport.emit(successBody(requestIdOf(text), text))
+                    }
+                }
+                assertTrue(viewModel.reconnectSelectedMachine())
+                val after = viewModel.uiState.value
+                assertEquals("pc-1", after.selectedMachineId)
+                assertEquals("ws-1", after.selectedWorkspaceId)
+                assertEquals("sess-1", after.selectedSessionId)
+                assertEquals(listOf("keep-me"), after.chatMessages.map { it.text })
+                assertTrue(after.syncGapWarning)
+                assertEquals("perm-gap", after.pendingPermission?.permissionId)
+                assertEquals("ws-1", after.workspaces.single().workspaceId)
+                assertEquals("sess-1", after.sessions.single().remoteSessionId)
+                assertEquals("ws-1", after.diffSnapshot?.workspaceId)
+                assertEquals("mock-model", after.currentModelId)
+                assertEquals(loadsBefore, transport.sent.count { commandType(it) == "session.load" })
+                assertEquals(sendsBefore, transport.sent.count { commandType(it) == "session.send" })
+                assertEquals(cancelsBefore, transport.sent.count { commandType(it) == "session.cancel" })
+                assertTrue(transport.sent.count { commandType(it) == "workspace.list" } >= 2)
+                assertTrue(transport.sent.count { commandType(it) == "session.list" } >= 2)
+                assertTrue(transport.sent.any { commandType(it) == "diff.read" })
+                assertTrue(transport.sent.any { commandType(it) == "model.list" })
+            }
+        }
+    }
+
+    @Test
+    fun gapResyncFailureKeepsWarningAndRetriesOnReplayedReconnect() {
+        withViewModel(autoRespond = false) { viewModel, dao, transport ->
+            runBlocking {
+                dao.upsert(pairedMachine())
+                transport.onSend = { text -> transport.emit(successBody(requestIdOf(text), text)) }
+                assertTrue(viewModel.connectExistingMachine("pc-1"))
+                assertTrue(viewModel.openWorkspace("ws-1"))
+                assertTrue(viewModel.resumeSession("sess-1"))
+                hangSessionSend(transport)
+                viewModel.sendPrompt("keep-me")
+                assertEquals("keep-me", viewModel.uiState.value.chatMessages.single().text)
+                transport.fail()
+                val loadsBefore = transport.sent.count { commandType(it) == "session.load" }
+                val sendsBefore = transport.sent.count { commandType(it) == "session.send" }
+                val cancelsBefore = transport.sent.count { commandType(it) == "session.cancel" }
+                var failWorkspaceList = true
+                transport.onSend = { text ->
+                    when (commandType(text)) {
+                        "sync.catch_up" ->
+                            transport.emit(
+                                resultJson(
+                                    requestIdOf(text),
+                                    ok = true,
+                                    value =
+                                        if (failWorkspaceList) {
+                                            """{"status":"gap","events":[],"headEventId":"evt-head","pendingPermission":{"permissionId":"perm-gap","kind":"execute","command":"ls","risk":"high"}}"""
+                                        } else {
+                                            """{"status":"replayed","events":[],"headEventId":"evt-head","pendingPermission":null}"""
+                                        },
+                                ),
+                            )
+                        "workspace.list" ->
+                            if (failWorkspaceList) {
+                                transport.emit(
+                                    resultJson(requestIdOf(text), ok = false, value = "null", error = "workspace list failed"),
+                                )
+                            } else {
+                                transport.emit(successBody(requestIdOf(text), text))
+                            }
+                        else -> transport.emit(successBody(requestIdOf(text), text))
+                    }
+                }
+                assertFalse(viewModel.reconnectSelectedMachine())
+                val afterFail = viewModel.uiState.value
+                assertEquals(RemoteConnectionState.Disconnected, afterFail.remoteConnection)
+                assertTrue(afterFail.syncGapWarning)
+                assertEquals("pc-1", afterFail.selectedMachineId)
+                assertEquals("ws-1", afterFail.selectedWorkspaceId)
+                assertEquals("sess-1", afterFail.selectedSessionId)
+                assertEquals(listOf("keep-me"), afterFail.chatMessages.map { it.text })
+                assertEquals("perm-gap", afterFail.pendingPermission?.permissionId)
+                assertEquals("workspace list failed", afterFail.errorMessage)
+                failWorkspaceList = false
+                assertTrue(viewModel.reconnectSelectedMachine())
+                val after = viewModel.uiState.value
+                assertEquals(RemoteConnectionState.Ready, after.remoteConnection)
+                assertTrue(after.syncGapWarning)
+                assertEquals("pc-1", after.selectedMachineId)
+                assertEquals("ws-1", after.selectedWorkspaceId)
+                assertEquals("sess-1", after.selectedSessionId)
+                assertEquals(listOf("keep-me"), after.chatMessages.map { it.text })
+                assertNull(after.pendingPermission)
+                assertEquals("ws-1", after.workspaces.single().workspaceId)
+                assertEquals("sess-1", after.sessions.single().remoteSessionId)
+                assertEquals(loadsBefore, transport.sent.count { commandType(it) == "session.load" })
+                assertEquals(sendsBefore, transport.sent.count { commandType(it) == "session.send" })
+                assertEquals(cancelsBefore, transport.sent.count { commandType(it) == "session.cancel" })
+                assertTrue(transport.sent.count { commandType(it) == "workspace.list" } >= 3)
+                assertTrue(transport.sent.count { commandType(it) == "session.list" } >= 2)
+            }
+        }
+    }
+
+    @Test
+    fun reconnectIsIgnoredWhileLoadingOrWhenAlreadyReady() {
+        withViewModel { viewModel, dao, _ ->
+            runBlocking {
+                dao.upsert(pairedMachine())
+                assertTrue(viewModel.connectExistingMachine("pc-1"))
+                assertFalse(viewModel.reconnectSelectedMachine())
+                assertEquals(RemoteConnectionState.Ready, viewModel.uiState.value.remoteConnection)
+            }
+        }
+    }
+
     private fun withViewModel(
         autoRespond: Boolean = true,
         hiddenModelDao: HiddenModelDao = FakeHiddenModelDao(),
@@ -1194,6 +1377,18 @@ internal fun successBody(
                                 .getValue("payload").jsonObject.getValue("modelId").jsonPrimitive.content
                         catalogJson(currentModelId = modelId)
                     }
+                    "sync.catch_up" -> {
+                        val lastEventId =
+                            Json.parseToJsonElement(text)
+                                .jsonObject
+                                .getValue("command")
+                                .jsonObject
+                                .getValue("payload")
+                                .jsonObject
+                                .getValue("lastEventId")
+                        val head = if (lastEventId.toString() == "null") "null" else lastEventId.toString()
+                        """{"status":"replayed","events":[],"headEventId":$head,"pendingPermission":null}"""
+                    }
                     else -> "null"
                 }
             else -> "null"
@@ -1201,14 +1396,17 @@ internal fun successBody(
     return resultJson(requestId, ok = true, value = value)
 }
 
+private val eventJsonSeq = AtomicLong(0)
+
 internal fun eventJson(
     type: String,
     sessionId: String?,
     payload: String,
-    eventId: String = "evt-1",
+    eventId: String? = null,
 ): String {
+    val id = eventId ?: "evt-auto-${eventJsonSeq.incrementAndGet()}"
     val sessionJson = if (sessionId == null) "null" else "\"$sessionId\""
-    return """{"kind":"event","event":{"eventId":"$eventId","sessionId":$sessionJson,"timestamp":"t","type":"$type","payload":$payload}}"""
+    return """{"kind":"event","event":{"eventId":"$id","sessionId":$sessionJson,"timestamp":"t","type":"$type","payload":$payload}}"""
 }
 
 internal fun snapshotJson(

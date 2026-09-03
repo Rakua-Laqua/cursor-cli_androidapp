@@ -58,6 +58,7 @@ export const COMMAND_TYPES = [
   'permission.reject',
   'file.read',
   'diff.read',
+  'sync.catch_up',
 ] as const;
 
 export type CommandType = (typeof COMMAND_TYPES)[number];
@@ -320,6 +321,24 @@ export interface FileContentPayload extends JsonObject {
   readonly truncated: boolean;
 }
 
+export interface SyncCatchUpCommandPayload extends JsonObject {
+  readonly lastEventId: string | null;
+}
+
+export interface SyncCatchUpPendingPermission extends JsonObject {
+  readonly permissionId: string;
+  readonly kind: string;
+  readonly command: string;
+  readonly risk: 'high';
+}
+
+export interface SyncCatchUpResult {
+  readonly status: 'replayed' | 'gap';
+  readonly events: readonly ParsedRemoteEvent[];
+  readonly headEventId: string | null;
+  readonly pendingPermission: SyncCatchUpPendingPermission | null;
+}
+
 const eventTypeSet: ReadonlySet<string> = new Set(EVENT_TYPES);
 const commandTypeSet: ReadonlySet<string> = new Set(COMMAND_TYPES);
 
@@ -393,6 +412,36 @@ export function parseRemoteCommand(json: string): RemoteCommand {
   return parseCommandRecord(JSON.parse(json));
 }
 
+export function parseSyncCatchUpCommandPayload(payload: JsonObject): SyncCatchUpCommandPayload {
+  return {
+    lastEventId: requireNullableString(payload, 'lastEventId'),
+  };
+}
+
+export function parseSyncCatchUpResult(value: JsonValue | null | undefined): SyncCatchUpResult {
+  if (!isRecord(value) || Array.isArray(value)) {
+    throw new ProtocolParseError('sync.catch_up value must be a JSON object.');
+  }
+  const status = requireString(value, 'status');
+  if (status !== 'replayed' && status !== 'gap') {
+    throw new ProtocolParseError("status must be 'replayed' or 'gap'.");
+  }
+  if (!Array.isArray(value.events)) {
+    throw new ProtocolParseError('events must be an array.');
+  }
+  const events = value.events.map((item) => parseEventRecord(item));
+  if (status === 'gap' && events.length > 0) {
+    throw new ProtocolParseError('gap result must have an empty events array.');
+  }
+  const pendingPermission = parseSyncCatchUpPendingPermission(value.pendingPermission);
+  return {
+    status,
+    events,
+    headEventId: requireNullableString(value, 'headEventId'),
+    pendingPermission,
+  };
+}
+
 export function parseRemoteCommandResult(json: string): RemoteCommandResult {
   return parseResultRecord(JSON.parse(json));
 }
@@ -452,7 +501,38 @@ function parseCommandRecord(value: unknown): RemoteCommand {
     throw new ProtocolParseError(`Unknown command type: ${type}`);
   }
 
+  if (type === 'sync.catch_up') {
+    parseSyncCatchUpCommandPayload(payload);
+  }
+
   return { requestId, sessionId, timestamp, type, payload };
+}
+
+function parseSyncCatchUpPendingPermission(value: unknown): SyncCatchUpPendingPermission | null {
+  if (value === null) {
+    return null;
+  }
+  if (!isRecord(value) || Array.isArray(value)) {
+    throw new ProtocolParseError('pendingPermission must be an object or null.');
+  }
+  const risk = requireString(value, 'risk');
+  if (risk !== 'high') {
+    throw new ProtocolParseError("pendingPermission.risk must be 'high'.");
+  }
+  const kind = value.kind;
+  const command = value.command;
+  if (typeof kind !== 'string') {
+    throw new ProtocolParseError('pendingPermission.kind must be a string.');
+  }
+  if (typeof command !== 'string') {
+    throw new ProtocolParseError('pendingPermission.command must be a string.');
+  }
+  return {
+    permissionId: requireString(value, 'permissionId'),
+    kind,
+    command,
+    risk: 'high',
+  };
 }
 
 function parseResultRecord(value: unknown): RemoteCommandResult {

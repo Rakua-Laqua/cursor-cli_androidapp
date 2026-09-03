@@ -562,6 +562,73 @@ class RemoteProtocolTest {
         }
     }
 
+    @Test
+    fun syncCatchUpPayloadAndResultParseDefensively() {
+        assertEquals("""{"lastEventId":null}""", RemoteProtocol.syncCatchUpPayload(null).toString())
+        assertEquals("""{"lastEventId":"evt-1"}""", RemoteProtocol.syncCatchUpPayload("evt-1").toString())
+        val frame =
+            RemoteProtocol.encodeCommandFrame(
+                requestId = "req-sync",
+                type = "sync.catch_up",
+                payload = RemoteProtocol.syncCatchUpPayload("evt-1"),
+                timestamp = "2026-09-04T00:00:00Z",
+                sessionId = "sess-1",
+            )
+        assertTrue(frame.contains("\"type\":\"sync.catch_up\""))
+        assertTrue(frame.contains("\"lastEventId\":\"evt-1\""))
+        assertTrue(frame.contains("\"sessionId\":\"sess-1\""))
+        val parsed =
+            RemoteProtocol.parseSyncCatchUpResult(
+                kotlinx.serialization.json.Json.parseToJsonElement(
+                    """{"status":"replayed","events":[{"eventId":"evt-2","sessionId":"sess-1","timestamp":"t","type":"assistant.message","payload":{"text":"hi","delta":true}}],"headEventId":"evt-2","pendingPermission":{"permissionId":"perm-1","kind":"execute","command":"ls","risk":"high"}}""",
+                ),
+            )
+        assertEquals("replayed", parsed.status)
+        assertEquals("evt-2", parsed.events.single().eventId)
+        assertEquals("evt-2", parsed.headEventId)
+        assertEquals("perm-1", parsed.pendingPermission?.permissionId)
+        val gap =
+            RemoteProtocol.parseSyncCatchUpResult(
+                kotlinx.serialization.json.Json.parseToJsonElement(
+                    """{"status":"gap","events":[],"headEventId":null,"pendingPermission":null}""",
+                ),
+            )
+        assertEquals("gap", gap.status)
+        assertTrue(gap.events.isEmpty())
+        assertNull(gap.headEventId)
+        assertNull(gap.pendingPermission)
+        try {
+            RemoteProtocol.parseSyncCatchUpResult(
+                kotlinx.serialization.json.Json.parseToJsonElement(
+                    """{"status":"gap","events":[{"eventId":"evt-2","sessionId":"sess-1","timestamp":"t","type":"assistant.message","payload":{"text":"hi","delta":true}}],"headEventId":"evt-2","pendingPermission":null}""",
+                ),
+            )
+            fail("expected ProtocolParseError")
+        } catch (error: ProtocolParseError) {
+            assertTrue(error.message!!.contains("empty events"))
+        }
+        try {
+            RemoteProtocol.parseSyncCatchUpResult(
+                kotlinx.serialization.json.Json.parseToJsonElement(
+                    """{"status":"other","events":[],"headEventId":null,"pendingPermission":null}""",
+                ),
+            )
+            fail("expected ProtocolParseError")
+        } catch (error: ProtocolParseError) {
+            assertTrue(error.message!!.contains("status"))
+        }
+        try {
+            RemoteProtocol.parseSyncCatchUpResult(
+                kotlinx.serialization.json.Json.parseToJsonElement(
+                    """{"status":"replayed","events":[],"headEventId":null,"pendingPermission":{"permissionId":"p","kind":"k","command":"c","risk":"low"}}""",
+                ),
+            )
+            fail("expected ProtocolParseError")
+        } catch (error: ProtocolParseError) {
+            assertTrue(error.message!!.contains("risk"))
+        }
+    }
+
     private fun chatRemoteEvent(
         type: String,
         payload: String,

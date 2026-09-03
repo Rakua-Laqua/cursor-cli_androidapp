@@ -12,6 +12,7 @@ import {
   serializeEvent,
   serializeRemoteCommandResult,
   serializeRemoteFrame,
+  parseSyncCatchUpResult,
 } from '../dist/index.js';
 
 test('known event serializes and deserializes without losing the envelope', () => {
@@ -480,4 +481,114 @@ test('session.usage_updated payload roundtrips with nested cost only', () => {
   assert.deepEqual(event.payload, { cost: { amount: 0.045, currency: 'USD' } });
   assert.equal(JSON.stringify(event.payload).includes('inputTokens'), false);
   assert.equal(JSON.stringify(event.payload).includes('totalTokens'), false);
+});
+
+test('sync.catch_up command and result roundtrip with defensive validation', () => {
+  const command = {
+    requestId: 'req_sync',
+    sessionId: 'remote_sess_123',
+    timestamp: '2026-09-04T00:00:00+09:00',
+    type: 'sync.catch_up',
+    payload: {
+      lastEventId: 'evt_head',
+    },
+  };
+  assert.deepEqual(parseRemoteCommand(serializeCommand(command)), command);
+  const nullCursor = {
+    ...command,
+    requestId: 'req_sync_null',
+    payload: { lastEventId: null },
+  };
+  assert.deepEqual(parseRemoteCommand(serializeCommand(nullCursor)), nullCursor);
+  assert.throws(
+    () =>
+      parseRemoteCommand(
+        JSON.stringify({
+          ...command,
+          payload: { lastEventId: '' },
+        }),
+      ),
+    /lastEventId/,
+  );
+  assert.throws(
+    () =>
+      parseRemoteCommand(
+        JSON.stringify({
+          ...command,
+          payload: { lastEventId: 1 },
+        }),
+      ),
+    /lastEventId/,
+  );
+
+  const event = {
+    eventId: 'evt_replay',
+    sessionId: 'remote_sess_123',
+    timestamp: '2026-09-04T00:00:01+09:00',
+    type: 'assistant.message',
+    payload: { text: 'chunk', delta: true },
+  };
+  const replayed = parseSyncCatchUpResult({
+    status: 'replayed',
+    events: [event],
+    headEventId: 'evt_replay',
+    pendingPermission: {
+      permissionId: 'perm_1',
+      kind: 'execute',
+      command: 'ls',
+      risk: 'high',
+    },
+  });
+  assert.equal(replayed.status, 'replayed');
+  assert.equal(replayed.events.length, 1);
+  assert.equal(replayed.headEventId, 'evt_replay');
+  assert.equal(replayed.pendingPermission?.permissionId, 'perm_1');
+  const gap = parseSyncCatchUpResult({
+    status: 'gap',
+    events: [],
+    headEventId: null,
+    pendingPermission: null,
+  });
+  assert.equal(gap.status, 'gap');
+  assert.deepEqual(gap.events, []);
+  assert.equal(gap.headEventId, null);
+  assert.equal(gap.pendingPermission, null);
+  assert.throws(
+    () =>
+      parseSyncCatchUpResult({
+        status: 'other',
+        events: [],
+        headEventId: null,
+        pendingPermission: null,
+      }),
+    /status/,
+  );
+  assert.throws(
+    () =>
+      parseSyncCatchUpResult({
+        status: 'replayed',
+        events: 'nope',
+        headEventId: null,
+        pendingPermission: null,
+      }),
+    /events/,
+  );
+  assert.throws(
+    () =>
+      parseSyncCatchUpResult({
+        status: 'gap',
+        events: [event],
+        headEventId: 'evt_replay',
+        pendingPermission: null,
+      }),
+    /empty events/,
+  );
+  const frame = parseRemoteFrame(
+    serializeRemoteFrame({
+      kind: 'result',
+      result: remoteCommandSuccess('req_sync', replayed),
+    }),
+  );
+  assert.equal(frame.kind, 'result');
+  assert.equal(frame.result.ok, true);
 });

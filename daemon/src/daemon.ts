@@ -1,13 +1,17 @@
 import { join } from 'node:path';
 
-import type {
-  DiffSnapshotPayload,
-  FileContentPayload,
-  KnownRemoteEvent,
-  ModelCatalogPayload,
-  RemoteCommand,
-  SessionPayload,
-  WorkspaceUpdatedPayload,
+import {
+  parseSyncCatchUpCommandPayload,
+  parseSyncCatchUpResult,
+  serializeEvent,
+  type DiffSnapshotPayload,
+  type FileContentPayload,
+  type KnownRemoteEvent,
+  type ModelCatalogPayload,
+  type RemoteCommand,
+  type SessionPayload,
+  type SyncCatchUpResult,
+  type WorkspaceUpdatedPayload,
 } from '@cursor-remote/protocol';
 
 import { AcpProcess, type AcpProcessLogger, type AcpProcessOptions } from './acp/process.js';
@@ -17,6 +21,7 @@ import { FileReader } from './file/file-reader.js';
 import { PairingManager } from './pairing/pairing-manager.js';
 import { AcpSessionAdapter } from './session/session-adapter.js';
 import { METADATA_FILE_NAME, MetadataStore } from './store/metadata-store.js';
+import { EventLog } from './sync/event-log.js';
 import { WorkspaceManager, type WorkspaceManagerOptions } from './workspace/workspace-manager.js';
 
 export interface DaemonAcpOptions {
@@ -37,6 +42,9 @@ export interface DaemonStartOptions {
 }
 
 export class Daemon {
+  private readonly eventLog = new EventLog();
+  private readonly stopEventLog: () => void;
+
   private constructor(
     private readonly acpProcess: AcpProcess,
     private readonly sessionAdapter: AcpSessionAdapter,
@@ -44,7 +52,19 @@ export class Daemon {
     private readonly pairingManager: PairingManager,
     private readonly diffPipeline: DiffPipeline,
     private readonly fileReader: FileReader,
-  ) {}
+  ) {
+    const append = (event: KnownRemoteEvent) => {
+      this.eventLog.append(event);
+    };
+    const stopSessions = this.sessionAdapter.onEvent(append);
+    const stopWorkspaces = this.workspaceManager.onEvent(append);
+    const stopDiffs = this.diffPipeline.onEvent(append);
+    this.stopEventLog = () => {
+      stopSessions();
+      stopWorkspaces();
+      stopDiffs();
+    };
+  }
 
   static async start(options: DaemonStartOptions = {}): Promise<Daemon> {
     const resolved = options.acp?.command
@@ -140,8 +160,12 @@ export class Daemon {
     | DiffSnapshotPayload
     | FileContentPayload
     | ModelCatalogPayload
+    | SyncCatchUpResult
     | undefined
   > {
+    if (command.type === 'sync.catch_up') {
+      return this.catchUp(command);
+    }
     if (command.type === 'workspace.list' || command.type === 'workspace.register') {
       return this.workspaceManager.handleCommand(command);
     }
@@ -155,6 +179,22 @@ export class Daemon {
   }
 
   async stop(): Promise<void> {
+    this.stopEventLog();
     await this.acpProcess.shutdown();
+  }
+
+  private catchUp(command: RemoteCommand): SyncCatchUpResult {
+    const { lastEventId } = parseSyncCatchUpCommandPayload(command.payload);
+    const replay = this.eventLog.catchUp(lastEventId);
+    return parseSyncCatchUpResult(
+      JSON.parse(
+        JSON.stringify({
+          status: replay.status,
+          events: replay.events.map((event) => JSON.parse(serializeEvent(event))),
+          headEventId: replay.headEventId,
+          pendingPermission: this.sessionAdapter.pendingPermissionSnapshot(command.sessionId),
+        }),
+      ),
+    );
   }
 }

@@ -96,6 +96,18 @@ export class AcpSessionAdapter {
     };
   }
 
+  pendingPermissionSnapshot(remoteSessionId: string | null): {
+    readonly permissionId: string;
+    readonly kind: string;
+    readonly command: string;
+    readonly risk: 'high';
+  } | null {
+    if (remoteSessionId === null || remoteSessionId.length === 0) {
+      return null;
+    }
+    return this.permissions.getPendingSnapshot(remoteSessionId);
+  }
+
   async create(input: CreateSessionInput): Promise<SessionPayload> {
     const workspace = this.workspaces.require(input.workspaceId);
     await this.ensureHandshake();

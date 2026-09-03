@@ -18,12 +18,14 @@ import dev.cursorremote.android.data.protocol.SessionContextBreakdownCategory
 import dev.cursorremote.android.data.protocol.SessionContextUsage
 import dev.cursorremote.android.data.protocol.SessionInfo
 import dev.cursorremote.android.data.protocol.SessionUsage
+import dev.cursorremote.android.data.protocol.SyncCatchUpResult
 import dev.cursorremote.android.data.protocol.WorkspaceInfo
 import dev.cursorremote.android.data.remote.RemoteConnectionState
 import dev.cursorremote.android.data.remote.RemoteRepository
 import dev.cursorremote.android.data.transport.ConnectionState
 import dev.cursorremote.android.voice.VoicePromptController
 import dev.cursorremote.android.voice.VoicePromptState
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -97,6 +99,7 @@ data class CursorRemoteUiState(
     val sessionContextBreakdown: List<SessionContextBreakdownCategory>? = null,
     val sessionUsage: SessionUsage? = null,
     val voice: VoicePromptState = VoicePromptState(),
+    val syncGapWarning: Boolean = false,
 ) {
     val pickerModels: List<ModelCatalogEntry>
         get() = modelCatalog.filter { it.available && it.id !in hiddenModelIds }
@@ -118,6 +121,7 @@ class CursorRemoteViewModel(
     private val diffEpoch = AtomicLong(0)
     private val fileEpoch = AtomicLong(0)
     private val modelEpoch = AtomicLong(0)
+    private val gapResyncRequired = AtomicBoolean(false)
     val uiState: StateFlow<CursorRemoteUiState> = _uiState.asStateFlow()
     val connectionState: StateFlow<ConnectionState> = remoteRepository.socketConnectionState
 
@@ -172,6 +176,7 @@ class CursorRemoteViewModel(
         invalidateDiff()
         invalidateFileViewer()
         invalidateModels()
+        gapResyncRequired.set(false)
         _uiState.update {
             it.withClearedChat().withClearedDiff().withClearedFileViewer().withClearedModels().withClearedSessionContext().copy(
                 selectedMachineId = machineId,
@@ -179,6 +184,7 @@ class CursorRemoteViewModel(
                 selectedSessionId = null,
                 workspaces = emptyList(),
                 sessions = emptyList(),
+                syncGapWarning = false,
             )
         }
     }
@@ -415,6 +421,32 @@ class CursorRemoteViewModel(
             selectMachine(machine.id)
             showWorkspaces(remoteRepository.listWorkspaces())
         }
+
+    suspend fun reconnectSelectedMachine(): Boolean {
+        val state = _uiState.value
+        val machineId = state.selectedMachineId
+        if (machineId.isNullOrEmpty()) {
+            _uiState.update { it.copy(errorMessage = "Machine is not selected") }
+            return false
+        }
+        if (state.remoteConnection != RemoteConnectionState.Failed &&
+            state.remoteConnection != RemoteConnectionState.Disconnected
+        ) {
+            return false
+        }
+        val selectedWorkspaceId = state.selectedWorkspaceId
+        val selectedSessionId = state.selectedSessionId
+        return runAction("Reconnect failed") {
+            val machine = machineDao.getMachine(machineId) ?: error("Machine is not registered")
+            val deviceId = machine.deviceId
+            if (deviceId.isNullOrEmpty() || machine.relayUrl.isEmpty()) {
+                error("Machine is not paired")
+            }
+            val auth = remoteRepository.reconnect(machine.relayUrl, machine.id, deviceId, selectedSessionId)
+            machineDao.updateConnectionInfo(machine.id, machine.relayUrl, deviceId, nowMillis())
+            applyCatchUpOutcome(auth.catchUp, selectedWorkspaceId, selectedSessionId)
+        }
+    }
 
     suspend fun openWorkspace(workspaceId: String): Boolean =
         runAction("Failed to list sessions") {
@@ -953,6 +985,86 @@ class CursorRemoteViewModel(
     }
 
     private fun nextMessageId(): String = "msg-${messageSeq.incrementAndGet()}"
+
+    private suspend fun applyCatchUpOutcome(
+        catchUp: SyncCatchUpResult,
+        workspaceId: String?,
+        sessionId: String?,
+    ) {
+        val snapshot = catchUp.pendingPermission
+        val pending =
+            snapshot?.let {
+                PendingPermission(
+                    permissionId = it.permissionId,
+                    kind = it.kind,
+                    command = it.command,
+                    risk = it.risk,
+                )
+            }
+        val needsResync = catchUp.status == "gap" || gapResyncRequired.get()
+        if (!needsResync) {
+            _uiState.update { state ->
+                state.copy(
+                    isLoading = false,
+                    errorMessage = null,
+                    pendingPermission = pending,
+                    syncGapWarning = false,
+                )
+            }
+            return
+        }
+        gapResyncRequired.set(true)
+        _uiState.update { state ->
+            state.copy(
+                pendingPermission = pending,
+                syncGapWarning = true,
+            )
+        }
+        try {
+            val workspaces = remoteRepository.listWorkspaces()
+            val sessions =
+                if (workspaceId.isNullOrEmpty()) {
+                    _uiState.value.sessions
+                } else {
+                    remoteRepository.listSessions(workspaceId)
+                }
+            gapResyncRequired.set(false)
+            _uiState.update { state ->
+                state.copy(
+                    isLoading = false,
+                    errorMessage = null,
+                    workspaces = workspaces,
+                    sessions = sessions,
+                    selectedWorkspaceId = workspaceId ?: state.selectedWorkspaceId,
+                    selectedSessionId = sessionId ?: state.selectedSessionId,
+                    pendingPermission = pending,
+                    syncGapWarning = true,
+                )
+            }
+        } catch (error: CancellationException) {
+            remoteRepository.disconnect()
+            throw error
+        } catch (error: Exception) {
+            remoteRepository.disconnect()
+            throw error
+        }
+        if (!workspaceId.isNullOrEmpty()) {
+            try {
+                applyDiffSnapshot(remoteRepository.readDiff(workspaceId), diffEpoch.get())
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+            }
+        }
+        if (!sessionId.isNullOrEmpty()) {
+            try {
+                applyModelCatalog(remoteRepository.listModels(sessionId), sessionId, modelEpoch.get())
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+            }
+        }
+    }
 
     private fun showWorkspaces(workspaces: List<WorkspaceInfo>) {
         _uiState.update {

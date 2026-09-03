@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import { createServer } from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -13,7 +14,7 @@ import {
   signAuthProof,
   signPairProof,
 } from '@cursor-remote/protocol';
-import { WebSocket } from 'ws';
+import { WebSocket, WebSocketServer } from 'ws';
 
 import { attachDaemonToRelay, Daemon } from '../dist/index.js';
 import { RelayServer } from '../../relay/dist/index.js';
@@ -67,6 +68,10 @@ async function waitUntil(predicate, timeoutMs = 4000) {
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
+}
+
+async function waitQuiet(ms = 40) {
+  await new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 async function waitForResult(frames, requestId, timeoutMs = 8000) {
@@ -427,4 +432,245 @@ test('websocket relays permission requested and approve command correlation', as
     streamed.some((event) => event.type === 'agent.completed'),
     true,
   );
+});
+
+test('sync.catch_up replays after auth and does not mix into other live streams', async (t) => {
+  const allowedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'relay-sync-root-'));
+  const workspacePath = path.join(allowedRoot, 'project');
+  fs.mkdirSync(workspacePath);
+  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'relay-sync-state-'));
+  const server = await RelayServer.listen({
+    host: '127.0.0.1',
+    port: 0,
+    heartbeatIntervalMs: 0,
+  });
+  t.after(() => server.close());
+
+  const machineId = 'pc-sync';
+  const keys = generateP256KeyPair();
+  const daemon = await Daemon.start({
+    acp: { ...mockLaunch(), shutdownTimeoutMs: 1000 },
+    workspaces: { allowedRoots: [allowedRoot] },
+    stateDir,
+  });
+  t.after(() => daemon.stop());
+  const connection = await attachDaemonToRelay(daemon, server.machineUrl(machineId));
+  t.after(() => connection.close());
+
+  const first = await openClient(server.clientUrl(machineId));
+  t.after(() => closeWs(first.socket));
+  const qr = daemon.pairing.createQrPayload({
+    relayUrl: `ws://127.0.0.1:${server.port}`,
+    machineId,
+  });
+  const deviceId = await pairDevice(first.socket, first.frames, qr, keys, machineId);
+  const registered = await rpc(first.socket, first.frames, 'workspace.register', {
+    path: workspacePath,
+  });
+  const created = await rpc(first.socket, first.frames, 'session.create', {
+    workspaceId: registered.workspaceId,
+    initialPrompt: '',
+    title: 'sync',
+  });
+  await rpc(
+    first.socket,
+    first.frames,
+    'session.send',
+    { text: 'hello-stream' },
+    created.remoteSessionId,
+  );
+  const liveEvents = eventsFrom(first.frames, 0);
+  const head = liveEvents.at(-1).eventId;
+
+  const nullCatch = await rpc(
+    first.socket,
+    first.frames,
+    'sync.catch_up',
+    { lastEventId: null },
+    created.remoteSessionId,
+  );
+  assert.equal(nullCatch.status, 'replayed');
+  assert.deepEqual(nullCatch.events, []);
+  assert.equal(nullCatch.headEventId, head);
+
+  const firstId = liveEvents[0].eventId;
+  const replayed = await rpc(
+    first.socket,
+    first.frames,
+    'sync.catch_up',
+    { lastEventId: firstId },
+    created.remoteSessionId,
+  );
+  assert.equal(replayed.status, 'replayed');
+  assert.ok(replayed.events.length > 0);
+  assert.equal(replayed.events[0].eventId, liveEvents[1].eventId);
+
+  const second = await openClient(server.clientUrl(machineId));
+  t.after(() => closeWs(second.socket));
+  await authDevice(second.socket, second.frames, keys, machineId, deviceId);
+  commandSeq += 1;
+  const unicastId = `req-${commandSeq}-sync.catch_up`;
+  first.socket.send(
+    serializeRemoteFrame({
+      kind: 'command',
+      command: {
+        requestId: unicastId,
+        sessionId: created.remoteSessionId,
+        timestamp: new Date().toISOString(),
+        type: 'sync.catch_up',
+        payload: { lastEventId: firstId },
+      },
+    }),
+  );
+  const unicastFrame = await waitForResult(first.frames, unicastId);
+  assert.equal(unicastFrame.result.ok, true);
+  assert.equal(unicastFrame.result.value.status, 'replayed');
+  await waitQuiet();
+  assert.equal(
+    second.frames.some((frame) => frame.kind === 'result' && frame.result.requestId === unicastId),
+    false,
+  );
+  const replayedIds = new Set(unicastFrame.result.value.events.map((event) => event.eventId));
+  assert.equal(
+    second.frames.some((frame) => frame.kind === 'event' && replayedIds.has(frame.event.eventId)),
+    false,
+  );
+
+  const gap = await rpc(first.socket, first.frames, 'sync.catch_up', { lastEventId: 'missing' });
+  assert.equal(gap.status, 'gap');
+  assert.deepEqual(gap.events, []);
+});
+
+test('daemon reconnects after unexpected relay drop, keeps EventLog, and close() stops retries', async (t) => {
+  const allowedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'relay-re-root-'));
+  const workspacePath = path.join(allowedRoot, 'project');
+  fs.mkdirSync(workspacePath);
+  const httpServer = createServer();
+  const wss = new WebSocketServer({ server: httpServer });
+  const sockets = [];
+  wss.on('connection', (socket) => {
+    sockets.push(socket);
+  });
+  await new Promise((resolve) => {
+    httpServer.listen(0, '127.0.0.1', resolve);
+  });
+  t.after(
+    () =>
+      new Promise((resolve) => {
+        wss.close(() => httpServer.close(resolve));
+      }),
+  );
+  const address = httpServer.address();
+  const url = `ws://127.0.0.1:${address.port}/machine?machineId=pc-re`;
+  const daemon = await Daemon.start({
+    acp: { ...mockLaunch(), shutdownTimeoutMs: 1000 },
+    workspaces: { allowedRoots: [allowedRoot] },
+  });
+  t.after(() => daemon.stop());
+
+  const connection = await attachDaemonToRelay(daemon, url);
+  assert.equal(sockets.length, 1);
+  const registered = await daemon.handleCommand(
+    parseTransportFrame(
+      serializeRemoteFrame({
+        kind: 'command',
+        command: {
+          requestId: 'req-reg',
+          sessionId: null,
+          timestamp: new Date().toISOString(),
+          type: 'workspace.register',
+          payload: { path: workspacePath },
+        },
+      }),
+    ).command,
+  );
+  assert.equal(typeof registered.workspaceId, 'string');
+  const beforeDrop = await daemon.handleCommand(
+    parseTransportFrame(
+      serializeRemoteFrame({
+        kind: 'command',
+        command: {
+          requestId: 'req-before',
+          sessionId: null,
+          timestamp: new Date().toISOString(),
+          type: 'sync.catch_up',
+          payload: { lastEventId: null },
+        },
+      }),
+    ).command,
+  );
+  sockets[0].terminate();
+  await waitUntil(() => sockets[0].readyState === WebSocket.CLOSED);
+  await daemon.workspaces.register(workspacePath);
+  const duringDrop = await daemon.handleCommand(
+    parseTransportFrame(
+      serializeRemoteFrame({
+        kind: 'command',
+        command: {
+          requestId: 'req-during',
+          sessionId: null,
+          timestamp: new Date().toISOString(),
+          type: 'sync.catch_up',
+          payload: { lastEventId: beforeDrop.headEventId },
+        },
+      }),
+    ).command,
+  );
+  assert.equal(duringDrop.status, 'replayed');
+  assert.ok(duringDrop.events.length > 0);
+  await waitUntil(() => sockets.length >= 2, 4000);
+  await connection.close();
+  const afterClose = sockets.length;
+  await waitQuiet(800);
+  assert.equal(sockets.length, afterClose);
+});
+
+test('daemon does not reconnect after Machine replaced close', async (t) => {
+  const httpServer = createServer();
+  const wss = new WebSocketServer({ server: httpServer });
+  const sockets = [];
+  wss.on('connection', (socket) => {
+    sockets.push(socket);
+  });
+  await new Promise((resolve) => {
+    httpServer.listen(0, '127.0.0.1', resolve);
+  });
+  t.after(
+    () =>
+      new Promise((resolve) => {
+        wss.close(() => httpServer.close(resolve));
+      }),
+  );
+  const address = httpServer.address();
+  const url = `ws://127.0.0.1:${address.port}/machine?machineId=pc-replaced`;
+  const daemon = await Daemon.start({
+    acp: { ...mockLaunch(), shutdownTimeoutMs: 1000 },
+  });
+  t.after(() => daemon.stop());
+
+  const connection = await attachDaemonToRelay(daemon, url);
+  assert.equal(sockets.length, 1);
+  sockets[0].close(1000, 'Machine replaced');
+  await waitUntil(() => sockets[0].readyState === WebSocket.CLOSED);
+  await waitQuiet(800);
+  assert.equal(sockets.length, 1);
+  await connection.close();
+  const afterClose = sockets.length;
+  await waitQuiet(800);
+  assert.equal(sockets.length, afterClose);
+});
+
+test('first relay connect failure rejects and does not retry', async (t) => {
+  const server = await RelayServer.listen({
+    host: '127.0.0.1',
+    port: 0,
+    heartbeatIntervalMs: 0,
+  });
+  const url = server.machineUrl('pc-fail');
+  await server.close();
+  const daemon = await Daemon.start({
+    acp: { ...mockLaunch(), shutdownTimeoutMs: 1000 },
+  });
+  t.after(() => daemon.stop());
+  await assert.rejects(() => attachDaemonToRelay(daemon, url));
 });

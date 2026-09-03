@@ -2,11 +2,13 @@ package dev.cursorremote.android.data.remote
 
 import dev.cursorremote.android.FakeTransport
 import dev.cursorremote.android.JavaEcdsaCredentialStore
+import dev.cursorremote.android.commandType
 import dev.cursorremote.android.eventJson
 import dev.cursorremote.android.hangSessionSend
 import dev.cursorremote.android.lastCommand
 import dev.cursorremote.android.requestIdOf
 import dev.cursorremote.android.resultJson
+import dev.cursorremote.android.successBody
 import dev.cursorremote.android.data.protocol.PairingQrPayload
 import dev.cursorremote.android.data.protocol.RemoteEvent
 import dev.cursorremote.android.data.protocol.RemoteProtocol
@@ -19,6 +21,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -32,13 +36,16 @@ class RemoteRepositoryTest {
             assertEquals(RemoteConnectionState.Ready, repo.connectionState.value)
             assertEquals("ws://127.0.0.1:8787/client?machineId=pc-1", transport.connectUrl)
             assertEquals(true, transport.sent.first().contains("\"kind\":\"pair\""))
+            assertEquals("sync.catch_up", commandType(lastCommand(transport, "sync.catch_up")))
+            assertEquals(true, lastCommand(transport, "sync.catch_up").contains("\"lastEventId\":null"))
         }
 
     @Test
     fun authProofAndCommandsUseRequestIdAndRejectWhenDisconnected() =
         withRepository { repo, transport ->
             repo.authenticate("ws://127.0.0.1:8787", "pc-1", "device-1")
-            assertEquals(true, transport.sent.last().contains("\"kind\":\"auth_proof\""))
+            assertEquals(true, transport.sent.any { it.contains("\"kind\":\"auth_proof\"") })
+            assertEquals("sync.catch_up", commandType(lastCommand(transport, "sync.catch_up")))
             assertEquals("ws-1", repo.listWorkspaces().single().workspaceId)
             assertEquals("sess-1", repo.listSessions("ws-1").single().remoteSessionId)
             assertEquals("sess-new", repo.createSession("ws-1").remoteSessionId)
@@ -243,6 +250,167 @@ class RemoteRepositoryTest {
             sendJob.await()
         }
 
+    @Test
+    fun catchUpBaselinesNullCursorThenReplaysHeldCursorAndDedupsLiveOverlap() =
+        withRepository(autoRespond = false) { repo, transport ->
+            val received = mutableListOf<RemoteEvent>()
+            val collectJob = launch(Dispatchers.Unconfined) { repo.events.collect { received += it } }
+            transport.onSend = { text ->
+                when (commandType(text)) {
+                    "sync.catch_up" -> {
+                        val lastEventId =
+                            Json.parseToJsonElement(text)
+                                .jsonObject
+                                .getValue("command")
+                                .jsonObject
+                                .getValue("payload")
+                                .jsonObject
+                                .getValue("lastEventId")
+                        if (lastEventId.toString() == "null") {
+                            transport.emit(
+                                resultJson(
+                                    requestIdOf(text),
+                                    ok = true,
+                                    value =
+                                        """{"status":"replayed","events":[],"headEventId":"evt-head","pendingPermission":null}""",
+                                ),
+                            )
+                        } else {
+                            transport.emit(
+                                eventJson("assistant.message", "sess-1", """{"text":"live","delta":true}""", eventId = "evt-live"),
+                            )
+                            transport.emit(
+                                eventJson("assistant.message", "sess-1", """{"text":"dup","delta":true}""", eventId = "evt-2"),
+                            )
+                            transport.emit(
+                                resultJson(
+                                    requestIdOf(text),
+                                    ok = true,
+                                    value =
+                                        """{"status":"replayed","events":[{"eventId":"evt-1","sessionId":"sess-1","timestamp":"t","type":"assistant.message","payload":{"text":"one","delta":true}},{"eventId":"evt-2","sessionId":"sess-1","timestamp":"t","type":"assistant.message","payload":{"text":"two","delta":true}}],"headEventId":"evt-2","pendingPermission":null}""",
+                                ),
+                            )
+                        }
+                    }
+                    else -> transport.emit(successBody(requestIdOf(text), text))
+                }
+            }
+            repo.authenticate("ws://127.0.0.1:8787", "pc-1", "device-1")
+            assertTrue(received.isEmpty())
+            assertEquals(true, lastCommand(transport, "sync.catch_up").contains("\"lastEventId\":null"))
+            assertEquals(RemoteConnectionState.Ready, repo.connectionState.value)
+            repo.disconnect()
+            repo.authenticate("ws://127.0.0.1:8787", "pc-1", "device-1")
+            assertEquals(true, lastCommand(transport, "sync.catch_up").contains("\"lastEventId\":\"evt-head\""))
+            assertEquals(listOf("evt-1", "evt-2", "evt-live"), received.map { it.eventId })
+            assertEquals(RemoteConnectionState.Ready, repo.connectionState.value)
+            transport.emit(eventJson("assistant.message", "sess-1", """{"text":"again","delta":true}""", eventId = "evt-2"))
+            assertEquals(listOf("evt-1", "evt-2", "evt-live"), received.map { it.eventId })
+            collectJob.cancel()
+        }
+
+    @Test
+    fun catchUpNullDoesNotRestoreBodiesAndReconnectSendsHeldCursorPerMachine() =
+        withRepository { repo, transport ->
+            val received = mutableListOf<RemoteEvent>()
+            val collectJob = launch(Dispatchers.Unconfined) { repo.events.collect { received += it } }
+            repo.authenticate("ws://127.0.0.1:8787", "pc-1", "device-1")
+            assertEquals(true, lastCommand(transport, "sync.catch_up").contains("\"lastEventId\":null"))
+            assertTrue(received.isEmpty())
+            transport.emit(eventJson("assistant.message", "sess-1", """{"text":"a","delta":true}""", eventId = "evt-a"))
+            assertEquals(listOf("evt-a"), received.map { it.eventId })
+            repo.disconnect()
+            repo.authenticate("ws://127.0.0.1:8787", "pc-1", "device-1")
+            assertEquals(true, lastCommand(transport, "sync.catch_up").contains("\"lastEventId\":\"evt-a\""))
+            repo.authenticate("ws://127.0.0.1:8787", "pc-2", "device-1")
+            assertEquals(true, lastCommand(transport, "sync.catch_up").contains("\"lastEventId\":null"))
+            repo.authenticate("ws://127.0.0.1:8787", "pc-1", "device-1")
+            assertEquals(true, lastCommand(transport, "sync.catch_up").contains("\"lastEventId\":\"evt-a\""))
+            collectJob.cancel()
+        }
+
+    @Test
+    fun catchUpGapAndSyncFailureFailOrExposeGapWithoutReadyOnParseError() =
+        withRepository(autoRespond = false) { repo, transport ->
+            transport.onSend = { text ->
+                if (commandType(text) == "sync.catch_up") {
+                    transport.emit(
+                        resultJson(
+                            requestIdOf(text),
+                            ok = true,
+                            value = """{"status":"gap","events":[],"headEventId":"evt-head","pendingPermission":null}""",
+                        ),
+                    )
+                } else {
+                    transport.emit(successBody(requestIdOf(text), text))
+                }
+            }
+            val result = repo.reconnect("ws://127.0.0.1:8787", "pc-1", "device-1", null)
+            assertEquals(RemoteConnectionState.Ready, repo.connectionState.value)
+            assertEquals("gap", result.catchUp.status)
+            assertEquals("evt-head", result.catchUp.headEventId)
+        }
+
+    @Test
+    fun catchUpFailureFailsConnection() {
+        withRepository(autoRespond = false) { repo, transport ->
+            transport.onSend = { text ->
+                if (commandType(text) == "sync.catch_up") {
+                    transport.emit(resultJson(requestIdOf(text), ok = false, value = "null", error = "sync failed"))
+                } else {
+                    transport.emit(successBody(requestIdOf(text), text))
+                }
+            }
+            assertAuthFailure(repo, transport, "sync failed") {
+                it.authenticate("ws://127.0.0.1:8787", "pc-1", "device-1")
+            }
+        }
+    }
+
+    @Test
+    fun reconnectApiReauthsSelectedSession() =
+        withRepository { repo, transport ->
+            repo.authenticate("ws://127.0.0.1:8787", "pc-1", "device-1", "sess-1")
+            assertEquals(true, lastCommand(transport, "sync.catch_up").contains("\"sessionId\":\"sess-1\""))
+            repo.disconnect()
+            repo.reconnect("ws://127.0.0.1:8787", "pc-1", "device-1", "sess-1")
+            assertEquals(RemoteConnectionState.Ready, repo.connectionState.value)
+            assertEquals(true, lastCommand(transport, "sync.catch_up").contains("\"sessionId\":\"sess-1\""))
+        }
+
+    @Test
+    fun liveQueueOverflowFailsCatchUpInsteadOfReady() =
+        withRepository(autoRespond = false, liveQueueLimit = 2) { repo, transport ->
+            transport.onSend = { text ->
+                if (commandType(text) != "sync.catch_up") {
+                    transport.emit(successBody(requestIdOf(text), text))
+                }
+            }
+            val authJob =
+                async(start = CoroutineStart.UNDISPATCHED) {
+                    try {
+                        repo.authenticate("ws://127.0.0.1:8787", "pc-1", "device-1")
+                        fail("expected overflow")
+                    } catch (error: RemoteRepositoryException) {
+                        assertEquals("Event buffer overflow", error.message)
+                    }
+                }
+            assertEquals("sync.catch_up", commandType(lastCommand(transport, "sync.catch_up")))
+            repeat(3) { index ->
+                transport.emit(
+                    eventJson(
+                        "assistant.message",
+                        "sess-1",
+                        """{"text":"$index","delta":true}""",
+                        eventId = "evt-overflow-$index",
+                    ),
+                )
+            }
+            authJob.await()
+            assertEquals(RemoteConnectionState.Failed, repo.connectionState.value)
+            assertEquals(ConnectionState.Disconnected, transport.connectionState.value)
+        }
+
     private suspend fun assertAuthFailure(
         repo: RemoteRepository,
         transport: FakeTransport,
@@ -268,6 +436,7 @@ class RemoteRepositoryTest {
         timeoutMs: Long = 1_000,
         autoRespond: Boolean = true,
         autoChallenge: Boolean = true,
+        liveQueueLimit: Int = 2048,
         block: suspend CoroutineScope.(RemoteRepository, FakeTransport) -> Unit,
     ) {
         val job = SupervisorJob()
@@ -279,6 +448,7 @@ class RemoteRepositoryTest {
                 credentialStore = JavaEcdsaCredentialStore(),
                 scope = scope,
                 requestTimeoutMs = timeoutMs,
+                liveQueueLimit = liveQueueLimit,
             )
         try {
             runBlocking { block(repo, transport) }

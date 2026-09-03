@@ -869,6 +869,10 @@ Hold / Tap mic
 - reconnect
 - state resync
 
+### 実施記録
+
+2026-09-04、v1.19.0 で TASK-600（Event Replay / Reconnect）を完了。同一プロセス内のフォアグラウンド replay / reconnect のみ。Phase 6 は未完了で、次は TASK-601。詳細は `docs/implementation_status.md` と `CHANGELOG.md` の 1.19.0。
+
 ---
 
 ## TASK-601: Daemon Restart Recovery

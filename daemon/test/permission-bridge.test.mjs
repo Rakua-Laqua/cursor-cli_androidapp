@@ -180,3 +180,20 @@ test('permission wait requires a running session and otherwise reject-once', asy
   bridge.rejectAllPending();
   await waiting;
 });
+
+test('pending snapshot is display-only and disappears after settle', async () => {
+  const { bridge } = createBridge();
+  assert.equal(bridge.getPendingSnapshot('remote-1'), null);
+  const waiting = bridge.handleRequestPermission(observedParams());
+  assert.deepEqual(bridge.getPendingSnapshot('remote-1'), {
+    permissionId: 'perm-fixed',
+    kind: 'execute',
+    command: 'Get-ChildItem -Force',
+    risk: 'high',
+  });
+  assert.equal(bridge.getPendingSnapshot('other'), null);
+  assert.equal(JSON.stringify(bridge.getPendingSnapshot('remote-1')).includes('optionId'), false);
+  bridge.approve('remote-1', 'perm-fixed');
+  await waiting;
+  assert.equal(bridge.getPendingSnapshot('remote-1'), null);
+});

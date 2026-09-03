@@ -122,6 +122,20 @@ data class SessionUsage(
 
 data class RemoteCommandResult(val requestId: String, val ok: Boolean, val value: JsonElement?, val error: String?)
 
+data class SyncCatchUpPendingPermission(
+    val permissionId: String,
+    val kind: String,
+    val command: String,
+    val risk: String,
+)
+
+data class SyncCatchUpResult(
+    val status: String,
+    val events: List<RemoteEvent>,
+    val headEventId: String?,
+    val pendingPermission: SyncCatchUpPendingPermission?,
+)
+
 data class RemoteEvent(
     val eventId: String,
     val sessionId: String?,
@@ -492,6 +506,31 @@ object RemoteProtocol {
         return buildJsonObject { put("modelId", modelId) }
     }
 
+    fun syncCatchUpPayload(lastEventId: String?): JsonObject {
+        if (lastEventId != null) requireNonEmpty(lastEventId, "lastEventId")
+        return buildJsonObject {
+            if (lastEventId == null) put("lastEventId", JsonNull) else put("lastEventId", lastEventId)
+        }
+    }
+
+    fun parseSyncCatchUpResult(value: JsonElement?): SyncCatchUpResult {
+        val root = parseObject(value ?: throw ProtocolParseError("sync.catch_up value must be a JSON object."), "sync.catch_up")
+        val status = requireNonEmptyString(root, "status")
+        if (status != "replayed" && status != "gap") {
+            throw ProtocolParseError("status must be 'replayed' or 'gap'.")
+        }
+        val events = parseList(root["events"], "events", ::parseEventRecord)
+        if (status == "gap" && events.isNotEmpty()) {
+            throw ProtocolParseError("gap result must have an empty events array.")
+        }
+        return SyncCatchUpResult(
+            status = status,
+            events = events,
+            headEventId = requireNullableString(root, "headEventId"),
+            pendingPermission = parseSyncCatchUpPendingPermission(root["pendingPermission"]),
+        )
+    }
+
     fun parseFileContent(value: JsonElement?): FileContent {
         val root = parseObject(value ?: throw ProtocolParseError("file content must be a JSON object."), "file content")
         return FileContent(
@@ -802,6 +841,26 @@ object RemoteProtocol {
         return ParsedPermissionResolved(
             permissionId = requireNonEmptyString(root, "permissionId"),
             decision = decision,
+        )
+    }
+
+    private fun parseSyncCatchUpPendingPermission(value: JsonElement?): SyncCatchUpPendingPermission? {
+        if (value == null || value is JsonNull) {
+            if (value == null) {
+                throw ProtocolParseError("pendingPermission must be an object or null.")
+            }
+            return null
+        }
+        val root = parseObject(value, "pendingPermission")
+        val risk = requireNonEmptyString(root, "risk")
+        if (risk != "high") {
+            throw ProtocolParseError("pendingPermission.risk must be 'high'.")
+        }
+        return SyncCatchUpPendingPermission(
+            permissionId = requireNonEmptyString(root, "permissionId"),
+            kind = requireStringField(root, "kind"),
+            command = requireStringField(root, "command"),
+            risk = "high",
         )
     }
 

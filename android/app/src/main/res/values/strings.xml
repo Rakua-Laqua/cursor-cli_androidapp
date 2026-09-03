@@ -23,4 +23,6 @@
     <string name="voice_cancel">Cancel</string>
     <string name="voice_microphone">Microphone: %1$s</string>
     <string name="voice_permission_denied">Microphone permission is required for voice input.</string>
+    <string name="reconnect">Reconnect</string>
+    <string name="sync_gap_warning">Chat history may be incomplete after a sync gap.</string>
 </resources>
