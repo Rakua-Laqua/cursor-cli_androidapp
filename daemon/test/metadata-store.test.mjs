@@ -122,6 +122,83 @@ test('daemon restart restores session list, load, and a follow-up prompt', async
   }
 });
 
+test('restart catch-up is a gap and EventLog is not persisted', async () => {
+  const stateDir = makeRoot();
+  const allowedRoot = makeRoot();
+  const project = path.join(allowedRoot, 'app');
+  fs.mkdirSync(project);
+
+  const first = await startDaemon(stateDir, [allowedRoot]);
+  let remoteSessionId;
+  let workspaceId;
+  let headEventId;
+  try {
+    const registered = first.workspaces.register(project);
+    workspaceId = registered.workspaceId;
+    const created = await first.sessions.create({
+      workspaceId,
+      initialPrompt: 'hello',
+      title: 'probe',
+    });
+    remoteSessionId = created.remoteSessionId;
+    const catchUp = await first.handleCommand(
+      parseRemoteCommand(
+        serializeCommand({
+          requestId: 'req-catch-up-1',
+          sessionId: remoteSessionId,
+          timestamp: new Date().toISOString(),
+          type: 'sync.catch_up',
+          payload: { lastEventId: null },
+        }),
+      ),
+    );
+    headEventId = catchUp.headEventId;
+    assert.equal(typeof headEventId, 'string');
+  } finally {
+    await first.stop();
+  }
+
+  const persisted = readMetadata(stateDir);
+  assert.equal('events' in persisted, false);
+  assert.equal(JSON.stringify(persisted).includes('echo:hello'), false);
+
+  const second = await startDaemon(stateDir, [allowedRoot]);
+  try {
+    const gap = await second.handleCommand(
+      parseRemoteCommand(
+        serializeCommand({
+          requestId: 'req-catch-up-2',
+          sessionId: remoteSessionId,
+          timestamp: new Date().toISOString(),
+          type: 'sync.catch_up',
+          payload: { lastEventId: headEventId },
+        }),
+      ),
+    );
+    assert.equal(gap.status, 'gap');
+    assert.deepEqual(gap.events, []);
+
+    const listed = await second.sessions.handleCommand(
+      parseRemoteCommand(
+        serializeCommand({
+          requestId: 'req-model-list',
+          sessionId: remoteSessionId,
+          timestamp: new Date().toISOString(),
+          type: 'model.list',
+          payload: {},
+        }),
+      ),
+    );
+    assert.ok(listed.models.some((model) => model.id === 'mock-model'));
+
+    await second.sessions.send(remoteSessionId, 'follow-up');
+    assert.equal(second.sessions.list(workspaceId)[0].status, 'completed');
+    assert.equal(JSON.stringify(readMetadata(stateDir)).includes('echo:follow-up'), false);
+  } finally {
+    await second.stop();
+  }
+});
+
 test('session.list filters by workspaceId', async () => {
   const stateDir = makeRoot();
   const allowedRoot = makeRoot();
@@ -176,7 +253,6 @@ test('running sessions are restored as disconnected', async () => {
   const project = path.join(allowedRoot, 'app');
   fs.mkdirSync(project);
   const workspaceId = 'ws-running';
-  const remoteSessionId = 'remote-running';
   fs.writeFileSync(
     path.join(stateDir, METADATA_FILE_NAME),
     JSON.stringify({
@@ -191,7 +267,7 @@ test('running sessions are restored as disconnected', async () => {
       ],
       sessions: [
         {
-          remoteSessionId,
+          remoteSessionId: 'remote-running',
           cursorSessionId: 'cursor-running',
           workspaceId,
           title: 'live',
@@ -201,15 +277,51 @@ test('running sessions are restored as disconnected', async () => {
           lastEventId: 'evt-1',
           selectedModelId: null,
         },
+        {
+          remoteSessionId: 'remote-approval',
+          cursorSessionId: 'cursor-approval',
+          workspaceId,
+          title: 'approval',
+          status: 'waiting_approval',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+          lastEventId: 'evt-2',
+          selectedModelId: null,
+        },
+        {
+          remoteSessionId: 'remote-user',
+          cursorSessionId: 'cursor-user',
+          workspaceId,
+          title: 'user',
+          status: 'waiting_user',
+          createdAt: '2026-01-01T00:00:00.000Z',
+          updatedAt: '2026-01-01T00:00:00.000Z',
+          lastEventId: 'evt-3',
+          selectedModelId: null,
+        },
       ],
     }),
   );
 
   const daemon = await startDaemon(stateDir, [allowedRoot]);
   try {
+    const written = readMetadata(stateDir);
+    assert.equal('events' in written, false);
+    assert.equal(
+      written.sessions.every((session) => session.status === 'disconnected'),
+      true,
+    );
+    assert.deepEqual(written.sessions.map((session) => session.remoteSessionId).sort(), [
+      'remote-approval',
+      'remote-running',
+      'remote-user',
+    ]);
     const listed = daemon.sessions.list(workspaceId);
-    assert.equal(listed.length, 1);
-    assert.equal(listed[0].status, 'disconnected');
+    assert.equal(listed.length, 3);
+    assert.equal(
+      listed.every((session) => session.status === 'disconnected'),
+      true,
+    );
   } finally {
     await daemon.stop();
   }

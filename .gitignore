@@ -26,3 +26,4 @@ Thumbs.db
 *.keystore
 *.jks
 runtime-data/
+google-services.json

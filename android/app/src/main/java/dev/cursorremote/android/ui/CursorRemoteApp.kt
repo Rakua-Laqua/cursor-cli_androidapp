@@ -9,6 +9,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
@@ -44,8 +45,13 @@ enum class AppDestination(val route: String) {
 @Composable
 fun CursorRemoteApp(viewModel: CursorRemoteViewModel) {
     val uiState by viewModel.uiState.collectAsState()
+    val restoreTarget by viewModel.navigationRestore.collectAsState()
     val navController = rememberNavController()
     val scope = rememberCoroutineScope()
+    LaunchedEffect(restoreTarget.revision) {
+        if (restoreTarget.revision == 0L) return@LaunchedEffect
+        restoreNavigationStack(navController, restoreTarget.destination)
+    }
     fun go(entry: NavBackStackEntry, destination: AppDestination, action: suspend () -> Boolean) {
         entry.lifecycleScope.launch {
             if (action()) navigateForward(navController, destination)
@@ -146,6 +152,19 @@ internal fun StatusBlock(uiState: CursorRemoteUiState) {
         Text("machine: ${uiState.selectedMachineId ?: "-"}")
         Text("workspace: ${uiState.selectedWorkspaceId ?: "-"}")
         Text("session: ${uiState.selectedSessionId ?: "-"}")
+    }
+}
+
+private fun restoreNavigationStack(
+    navController: NavHostController,
+    destination: AppDestination,
+) {
+    navController.popBackStack(AppDestination.Machines.route, inclusive = false)
+    var current = AppDestination.Machines
+    while (current != destination) {
+        val next = current.next ?: break
+        navController.navigate(next.route) { launchSingleTop = true }
+        current = next
     }
 }
 

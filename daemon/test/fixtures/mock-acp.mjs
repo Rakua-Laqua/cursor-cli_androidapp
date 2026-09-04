@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import readline from 'node:readline';
 
 function send(message) {
@@ -192,12 +193,21 @@ const delayWaiters = new Map();
 let sessionSeq = 0;
 let initializeCount = 0;
 let authenticateCount = 0;
+let loadCount = 0;
+let promptCount = 0;
 let initializeFailRemaining = Number.parseInt(process.env.MOCK_ACP_FAIL_INITIALIZE ?? '0', 10);
 if (!Number.isFinite(initializeFailRemaining) || initializeFailRemaining < 0) {
   initializeFailRemaining = 0;
 }
 const ignoreStdin = process.env.MOCK_ACP_IGNORE_STDIN === '1';
 const ignoreSigterm = process.env.MOCK_ACP_IGNORE_SIGTERM === '1';
+
+if (
+  typeof process.env.MOCK_ACP_SPAWN_LOG === 'string' &&
+  process.env.MOCK_ACP_SPAWN_LOG.length > 0
+) {
+  fs.appendFileSync(process.env.MOCK_ACP_SPAWN_LOG, `${process.pid}\n`);
+}
 
 process.stderr.write('mock-acp-started\n');
 
@@ -274,7 +284,7 @@ rl.on('line', (line) => {
     send({
       jsonrpc: '2.0',
       id,
-      result: { initializeCount, authenticateCount },
+      result: { initializeCount, authenticateCount, loadCount, promptCount },
     });
     return;
   }
@@ -296,6 +306,19 @@ rl.on('line', (line) => {
   }
 
   if (method === 'session/load') {
+    loadCount += 1;
+    if (process.env.MOCK_ACP_CRASH_ON_LOAD === '1') {
+      process.exit(4);
+      return;
+    }
+    if (process.env.MOCK_ACP_FAIL_LOAD === '1') {
+      send({
+        jsonrpc: '2.0',
+        id,
+        error: { code: -32000, message: 'session/load failed' },
+      });
+      return;
+    }
     const sessionId = params?.sessionId;
     if (typeof sessionId !== 'string' || sessionId.length === 0) {
       send({
@@ -318,6 +341,7 @@ rl.on('line', (line) => {
   }
 
   if (method === 'session/prompt') {
+    promptCount += 1;
     void handlePrompt(id, params);
     return;
   }

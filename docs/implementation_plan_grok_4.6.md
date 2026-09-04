@@ -862,6 +862,8 @@ Hold / Tap mic
 
 # Phase 6 — Reliability / Security
 
+2026-09-04、v1.20.0 で TASK-601〜604 のコード実装を完了。Phase 6 はコード実装完了・外部実機検証待ち。live FCM 配送・通知 tap 実機・Doze 配送は未実施。詳細は `docs/implementation_status.md`。
+
 ## TASK-600: Event Replay / Reconnect
 
 - lastEventId
@@ -871,7 +873,7 @@ Hold / Tap mic
 
 ### 実施記録
 
-2026-09-04、v1.19.0 で TASK-600（Event Replay / Reconnect）を完了。同一プロセス内のフォアグラウンド replay / reconnect のみ。Phase 6 は未完了で、次は TASK-601。詳細は `docs/implementation_status.md` と `CHANGELOG.md` の 1.19.0。
+2026-09-04、v1.19.0 で TASK-600（Event Replay / Reconnect）を完了。同一プロセス内のフォアグラウンド replay / reconnect のみ。後続の TASK-601〜604 は v1.20.0。詳細は `docs/implementation_status.md` と `CHANGELOG.md` の 1.19.0。
 
 ---
 
@@ -887,6 +889,10 @@ Cursor session mapping
 
 を復元する。
 
+### 実施記録
+
+2026-09-04、v1.20.0 で実装。Daemon 再起動後に Workspace / Session / Cursor session mapping / device auth を metadata から復元する。EventLog は永続化せず、再起動後 catch-up は `gap`。会話本文の独自保存はしない。
+
 ---
 
 ## TASK-602: Cursor Process Recovery
@@ -897,6 +903,10 @@ ACP異常終了時:
 - process再起動
 - load可能Sessionは再接続
 - 実行中commandを勝手に再実行しない
+
+### 実施記録
+
+2026-09-04、v1.20.0 で実装。ACP 異常終了後の bounded process recovery、generation 隔離、`initialize` 後に load 可能な Session の再 load。in-flight command は一度だけ失敗し、prompt / permission は自動再実行しない。shutdown 競合は安全に終了する。
 
 ---
 
@@ -912,6 +922,10 @@ ACP異常終了時:
 - permission policy
 - secret logging check
 
+### 実施記録
+
+2026-09-04、v1.20.0 で実装。Workspace canonical 境界、symlink 差替え、sensitive basename（env / private key / credentials / secrets 等）、device auth / replay、permission fail-closed を強化。ACP stderr 本文は記録せず抑止通知だけ。
+
 ---
 
 ## TASK-604: Android Background Reliability
@@ -921,6 +935,10 @@ ACP異常終了時:
 - FCM
 - notification deep link
 - Doze影響確認
+
+### 実施記録
+
+2026-09-04、v1.20.0 でコード実装完了。Room v4 の選択 / machine 別 cursor / `needsCatchUp` / 通知 `eventId` dedup、foreground 限定 reconnect / catch-up、FCM data-only high priority、認証済み端末登録、Relay RAM registry、即時 / 60 秒 waiting、WS/FCM 共有永続 dedup、厳密な notification deep link。通知から prompt / permission は自動再実行しない。live FCM 配送・通知 tap 実機・Doze 配送は未実施。Phase 6 はコード実装完了・外部実機検証待ち。
 
 ---
 

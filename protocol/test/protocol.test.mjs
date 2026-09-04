@@ -13,6 +13,10 @@ import {
   serializeRemoteCommandResult,
   serializeRemoteFrame,
   parseSyncCatchUpResult,
+  createFcmDataPayload,
+  parseFcmDataPayload,
+  PUSH_EVENT_TYPES,
+  ProtocolParseError,
 } from '../dist/index.js';
 
 test('known event serializes and deserializes without losing the envelope', () => {
@@ -591,4 +595,32 @@ test('sync.catch_up command and result roundtrip with defensive validation', () 
   );
   assert.equal(frame.kind, 'result');
   assert.equal(frame.result.ok, true);
+});
+
+test('FCM data payload is exactly eventId, type, machineId, and sessionId strings', () => {
+  assert.deepEqual(
+    [...PUSH_EVENT_TYPES],
+    ['permission.requested', 'agent.completed', 'agent.failed', 'agent.waiting'],
+  );
+  const payload = createFcmDataPayload({
+    eventId: 'evt-1',
+    type: 'permission.requested',
+    machineId: 'pc-1',
+    sessionId: null,
+  });
+  assert.deepEqual(payload, {
+    eventId: 'evt-1',
+    type: 'permission.requested',
+    machineId: 'pc-1',
+    sessionId: '',
+  });
+  assert.equal(Object.keys(payload).join(','), 'eventId,type,machineId,sessionId');
+  assert.throws(() => parseFcmDataPayload({ ...payload, command: 'ls' }), ProtocolParseError);
+  for (const field of ['eventId', 'machineId', 'sessionId']) {
+    assert.throws(() => parseFcmDataPayload({ ...payload, [field]: 'x'.repeat(513) }), /512/);
+  }
+  assert.throws(
+    () => createFcmDataPayload({ ...payload, type: 'assistant.message', sessionId: null }),
+    /push event type/,
+  );
 });

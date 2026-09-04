@@ -1,5 +1,29 @@
 # CHANGELOG
 
+## [1.20.0] - 2026-09-04
+
+### 追加
+
+- Daemon 再起動後、`metadata.json` から Workspace / Session / Cursor session mapping / device auth を復元する。EventLog は永続化せず、再起動後の catch-up は `gap`。会話本文の独自保存はしない。
+- ACP 異常終了後の bounded process recovery。generation を隔離し、`initialize` 後に load 可能な Session を再 load する。in-flight command は一度だけ失敗し、prompt / permission は自動再実行しない。shutdown 競合は安全に終了する。
+- Android Room v4 で選択、machine 別 cursor、`needsCatchUp`、通知 `eventId` dedup を永続化する。foreground 時だけ bounded reconnect / catch-up する。
+- 認証済み端末向けの FCM data-only high priority。複数 Android は `machineId`+`deviceId` の slot として同じ machine event の対象になれる。`permission.requested` / `agent.completed` / `agent.failed` は即時、`agent.waiting` は 60 秒継続後。WebSocket と FCM は共有の永続 dedup。通知 tap は厳密な machine / session 解決。通知から prompt / permission action は自動再実行しない。foreground 中は FCM 通知を出さず、background 時だけ出す。background WebSocket の常駐再接続はしない。FCM は wake path、foreground 復帰時が reconnect / catch-up。
+
+### 変更
+
+- パッケージ版 1.20.0、Android `versionCode` 34 / `versionName` 1.20.0。Firebase Messaging の推移 `androidx.fragment:fragment:1.1.0` は `androidx.fragment:fragment:1.8.5` の明示依存で 1.3.0 以上へ解決し、lint `InvalidFragmentVersionForActivityResult` を解消した。既存の Firebase BoM / `firebase-messaging` / 条件付き `google-services` は維持する。
+- Phase 6（TASK-601〜604）はコード実装完了、外部実機検証待ち。live FCM 配送・通知 tap 実機・Doze 配送は未実施。TLS / インターネット公開、QR camera、Chat 本文永続化は対象外 / 未実装のまま。
+
+### セキュリティ
+
+- Workspace canonical 境界、symlink 差替え、sensitive basename（env / private key / credentials / secrets 等）、device auth / replay、permission fail-closed を強化する。ACP stderr 本文は記録せず、抑止通知だけにする。
+- Relay FCM は `FCM_PROJECT_ID` と `FCM_ACCESS_TOKEN` の両方があるときだけ HTTP v1 送信する。片方でも無ければ従来 Relay は動作し、FCM だけ無効。access token は短命なので運用側で更新して Relay を再起動する。秘密は commit / log しない。Relay の token registry は process memory のみ。
+- Android FCM は `android/app/google-services.json` があるときだけ `google-services` plugin を適用する（gitignore 済み）。無い場合も build と非 FCM 機能は動作し、FCM bootstrap は no-op。FCM token は process memory のみで永続化・log しない。
+
+### テスト
+
+- `npm test` は protocol 22 / daemon 142 / relay 14、全件 pass。`npm run lint` pass。targeted Prettier pass。Android `:app:assembleDebug :app:testDebugUnitTest :app:lintDebug --rerun-tasks` BUILD SUCCESSFUL（53 actionable tasks、JVM unit 134、fail / error / skipped 0、lint error 0）。`git diff --check` pass。実 Firebase project / access token / `google-services.json` / 実機が無いため、live FCM 配送・通知 tap 実機・Doze 配送は未実施。
+
 ## [1.19.0] - 2026-09-04
 
 ### 追加

@@ -21,6 +21,15 @@ test('sensitive matcher is case-insensitive on basename patterns', () => {
     'secrets',
     'secrets.yaml',
     'SECRETS_TOKEN',
+    'id_rsa',
+    'ID_RSA',
+    '.ssh/id_ed25519',
+    'id_ecdsa',
+    'id_dsa',
+    '.netrc',
+    '.NETRC',
+    'cert.p12',
+    'AUTH.PFX',
   ];
   for (const path of sensitive) {
     assert.equal(isSensitivePath(path), true, path);
@@ -34,6 +43,9 @@ test('sensitive matcher is case-insensitive on basename patterns', () => {
     'pem.txt',
     'my-credentials-note.md',
     'nested/config.json',
+    'id_rsa.pub',
+    'netrc',
+    'notes.p12.bak',
   ];
   for (const path of allowed) {
     assert.equal(isSensitivePath(path), false, path);

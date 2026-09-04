@@ -60,12 +60,26 @@ function collectEvents(daemon) {
 
 async function waitUntil(predicate, timeoutMs = 2000) {
   const started = Date.now();
-  while (!predicate()) {
+  while (!(await predicate())) {
     if (Date.now() - started > timeoutMs) {
       throw new Error('timed out waiting for condition');
     }
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
+}
+
+async function waitForRecovery(daemon, previousPid, loadCount = 1) {
+  await waitUntil(async () => {
+    if (daemon.acp.getState() !== 'running' || daemon.acp.pid === previousPid) {
+      return false;
+    }
+    try {
+      const stats = await daemon.acp.request('debug-stats');
+      return stats.loadCount >= loadCount;
+    } catch {
+      return false;
+    }
+  });
 }
 
 function joinedAssistantText(events) {
@@ -782,5 +796,126 @@ test('catch-up returns pending permission snapshot without session.load or promp
       catchUpCommand(created.remoteSessionId, catchUp.headEventId),
     );
     assert.equal(settled.pendingPermission, null);
+  });
+});
+
+test('ACP crash fail-closes permission, fails the session once, and reloads without replaying prompt', async () => {
+  const workspacePath = makeWorkspace();
+  await withDaemon(async (daemon) => {
+    const events = collectEvents(daemon);
+    const { created } = await createIdleSession(daemon, workspacePath);
+    const sending = daemon.sessions.send(created.remoteSessionId, 'ASK_PERMISSION');
+    await waitForPermissionRequested(events);
+    const messagesBefore = events.filter((event) => event.type === 'assistant.message').length;
+    assert.equal(daemon.workspaces.require(created.workspaceId).activeSessionCount, 1);
+    const oldPid = daemon.acp.pid;
+    await daemon.acp.request('crash').catch(() => {});
+    await assert.rejects(sending, AcpProcessExitedError);
+
+    const failed = events.filter((event) => event.type === 'agent.failed');
+    assert.equal(failed.length, 1);
+    assert.equal(terminalEvents(events).length, 1);
+    assert.equal(daemon.workspaces.require(created.workspaceId).activeSessionCount, 0);
+    const resolved = events.filter((event) => event.type === 'permission.resolved');
+    assert.equal(resolved.length, 1);
+    assert.equal(resolved[0].payload.decision, 'rejected');
+    const resolvedAt = events.findIndex((event) => event.type === 'permission.resolved');
+    const failedAt = events.findIndex((event) => event.type === 'agent.failed');
+    assert.ok(resolvedAt < failedAt);
+    assert.equal(joinedAssistantText(events).includes('allow-always'), false);
+
+    await waitForRecovery(daemon, oldPid);
+    const stats = await daemon.acp.request('debug-stats');
+    assert.equal(stats.initializeCount, 1);
+    assert.equal(stats.authenticateCount, 1);
+    assert.equal(stats.loadCount, 1);
+    assert.equal(stats.promptCount, 0);
+    assert.equal(events.filter((event) => event.type === 'agent.failed').length, 1);
+    assert.equal(
+      events.filter((event) => event.type === 'assistant.message').length,
+      messagesBefore,
+    );
+    assert.equal(daemon.workspaces.require(created.workspaceId).activeSessionCount, 0);
+
+    await daemon.sessions.send(created.remoteSessionId, 'hello');
+    assert.match(joinedAssistantText(events), /echo:hello/);
+    const afterSend = await daemon.acp.request('debug-stats');
+    assert.equal(afterSend.promptCount, 1);
+  });
+});
+
+test('ACP recovery keeps mapping when session/load fails and does not loop on crash-during-load', async () => {
+  const workspacePath = makeWorkspace();
+  await withDaemon(
+    async (daemon) => {
+      const { created } = await createIdleSession(daemon, workspacePath);
+      const oldPid = daemon.acp.pid;
+      await daemon.acp.request('crash').catch(() => {});
+      await waitUntil(() => {
+        const listed = daemon.sessions.list(created.workspaceId);
+        return listed[0]?.status === 'disconnected';
+      });
+      const listed = daemon.sessions.list(created.workspaceId);
+      assert.equal(listed.length, 1);
+      assert.equal(listed[0].remoteSessionId, created.remoteSessionId);
+      assert.equal(listed[0].cursorSessionId, created.cursorSessionId);
+      assert.equal(listed[0].status, 'disconnected');
+      await waitUntil(() => daemon.acp.getState() === 'running' && daemon.acp.pid !== oldPid);
+    },
+    {
+      env: {
+        ...process.env,
+        MOCK_ACP_FAIL_LOAD: '1',
+      },
+    },
+  );
+
+  const spawnLog = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'acp-spawn-')), 'spawns.log');
+  const looping = await Daemon.start({
+    acp: {
+      ...mockLaunch(),
+      shutdownTimeoutMs: 1000,
+      env: {
+        ...process.env,
+        MOCK_ACP_SPAWN_LOG: spawnLog,
+        MOCK_ACP_CRASH_ON_LOAD: '1',
+      },
+    },
+    workspaces: { allowedRoots: [os.tmpdir()] },
+  });
+  try {
+    const { created } = await createIdleSession(looping, workspacePath);
+    await looping.acp.request('crash').catch(() => {});
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    const spawns = fs.readFileSync(spawnLog, 'utf8').trim().split(/\n/).filter(Boolean);
+    assert.equal(spawns.length, 2);
+    assert.equal(
+      looping.sessions.list(created.workspaceId)[0].cursorSessionId,
+      created.cursorSessionId,
+    );
+    assert.equal(looping.acp.getState(), 'exited');
+  } finally {
+    await looping.stop();
+  }
+});
+
+test('commands wait for recovery and fail closed while stopping', async () => {
+  const workspacePath = makeWorkspace();
+  await withDaemon(async (daemon) => {
+    const { created } = await createIdleSession(daemon, workspacePath);
+    const oldPid = daemon.acp.pid;
+    await daemon.acp.request('crash').catch(() => {});
+    const listed = await daemon.sessions.handleCommand(
+      modelCommand('model.list', created.remoteSessionId),
+    );
+    assert.ok(listed.models.some((model) => model.id === 'mock-model'));
+    assert.notEqual(daemon.acp.pid, oldPid);
+
+    const stopping = daemon.stop();
+    await assert.rejects(
+      () => daemon.sessions.send(created.remoteSessionId, 'after-stop'),
+      /stopping|not running/,
+    );
+    await stopping;
   });
 });

@@ -1,13 +1,17 @@
 import { createServer, type IncomingMessage, type Server as HttpServer } from 'node:http';
 import { WebSocketServer, type WebSocket } from 'ws';
 
-import { RelayRouter } from './router.js';
+import { RelayRouter, type RelayRouterOptions } from './router.js';
+import { createFcmSenderFromEnv, type FcmSender, type SchedulePush } from './fcm.js';
 
 export interface RelayServerOptions {
   readonly host?: string;
   readonly port?: number;
   readonly heartbeatIntervalMs?: number;
   readonly staleTimeoutMs?: number;
+  readonly fcmSender?: FcmSender | undefined;
+  readonly waitingDelayMs?: number | undefined;
+  readonly schedulePush?: SchedulePush | undefined;
 }
 
 export class RelayServer {
@@ -17,7 +21,7 @@ export class RelayServer {
   private readonly staleTimeoutMs: number;
   private readonly httpServer: HttpServer;
   private readonly wss: WebSocketServer;
-  private readonly router = new RelayRouter();
+  private readonly router: RelayRouter;
   private heartbeatTimer: ReturnType<typeof setInterval> | undefined;
   private closing: Promise<void> | undefined;
 
@@ -27,6 +31,7 @@ export class RelayServer {
     this.heartbeatIntervalMs = options.heartbeatIntervalMs ?? 30_000;
     this.staleTimeoutMs =
       options.staleTimeoutMs ?? (this.heartbeatIntervalMs > 0 ? this.heartbeatIntervalMs * 2 : 0);
+    this.router = new RelayRouter(relayRouterOptions(options));
     this.httpServer = createServer((_request, response) => {
       response.statusCode = 404;
       response.end();
@@ -128,4 +133,12 @@ export class RelayServer {
       });
     });
   }
+}
+
+function relayRouterOptions(options: RelayServerOptions): RelayRouterOptions {
+  return {
+    fcmSender: options.fcmSender ?? createFcmSenderFromEnv(),
+    waitingDelayMs: options.waitingDelayMs,
+    schedule: options.schedulePush,
+  };
 }

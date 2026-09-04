@@ -184,3 +184,31 @@ test('transport parser preserves RemoteFrame behavior and strictly parses pairin
     /unexpected or missing fields/,
   );
 });
+
+test('transport_register strictly parses, serializes, and enforces bounds', () => {
+  const frame = {
+    kind: 'transport_register',
+    requestId: 'reg-1',
+    fcmToken: 'd1.tok-APA91b:x',
+    appForeground: false,
+  };
+  const round = (value) => parseTransportFrame(serializeTransportFrame(value));
+  const reject = (value, pattern) =>
+    assert.throws(() => parseTransportFrame(JSON.stringify(value)), pattern);
+  assert.deepEqual(round(frame), frame);
+  assert.deepEqual(round({ ...frame, fcmToken: null, appForeground: true }), {
+    ...frame,
+    fcmToken: null,
+    appForeground: true,
+  });
+  reject({ ...frame, extra: true }, /unexpected or missing fields/);
+  reject({ kind: 'transport_register', requestId: 'reg-1', appForeground: false }, /unexpected/);
+  reject({ ...frame, requestId: 'r'.repeat(129) }, /requestId/);
+  reject({ ...frame, fcmToken: 'tok/slash' }, /invalid characters/);
+  reject({ ...frame, fcmToken: '' }, /non-empty string or null/);
+  reject({ ...frame, fcmToken: 'a'.repeat(4097) }, /4096/);
+  reject({ ...frame, appForeground: 'no' }, /boolean/);
+  const padded = `${JSON.stringify(frame).slice(0, -1)}${' '.repeat(8200)}}`;
+  assert.throws(() => parseTransportFrame(padded), /8192/);
+  assert.throws(() => parseRemoteFrame(serializeTransportFrame(frame)), /kind must be/);
+});

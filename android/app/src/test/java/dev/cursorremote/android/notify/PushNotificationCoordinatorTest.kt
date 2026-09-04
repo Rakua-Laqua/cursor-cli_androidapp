@@ -1,9 +1,13 @@
 package dev.cursorremote.android.notify
 
+import dev.cursorremote.android.data.local.ReliabilityStore
+import dev.cursorremote.android.data.local.VolatileReliabilityStore
 import dev.cursorremote.android.data.protocol.IncomingRemoteFrame
 import dev.cursorremote.android.data.protocol.RemoteEvent
 import dev.cursorremote.android.data.protocol.RemoteProtocol
 import dev.cursorremote.android.data.remote.RemoteConnectionState
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -305,20 +309,155 @@ class PushNotificationCoordinatorTest {
         assertTrue(harness.poster.posted.isEmpty())
     }
 
-    private class Harness {
+    @Test
+    fun websocketAndFcmSharePersistentDedupAcrossCoordinatorRecreation() {
+        val store = VolatileReliabilityStore()
+        val first = Harness(store = store)
+        first.coordinator.onEvent(chatEvent("agent.completed", """{"reason":null}""", eventId = "evt-shared"))
+        assertEquals(listOf("evt-shared"), first.poster.posted.map { it.first })
+        val second = Harness(store = store)
+        second.coordinator.onEvent(chatEvent("agent.completed", """{"reason":null}""", eventId = "evt-shared"))
+        second.coordinator.onPush(
+            FcmDataPayload("evt-shared", PUSH_TYPE_AGENT_COMPLETED, "pc-1", "sess-1"),
+        )
+        assertTrue(second.poster.posted.isEmpty())
+    }
+
+    @Test
+    fun fcmThenWebsocketSameEventIdNotifiesOnce() {
+        val harness = Harness()
+        harness.coordinator.onPush(
+            FcmDataPayload("evt-done", PUSH_TYPE_AGENT_COMPLETED, "pc-1", "sess-1"),
+        )
+        harness.coordinator.onEvent(chatEvent("agent.completed", """{"reason":"secret"}""", eventId = "evt-done"))
+        assertEquals(
+            listOf("evt-done" to NotificationContent("Session completed", "Cursor finished the task.")),
+            harness.poster.posted,
+        )
+        assertEquals(
+            listOf(NotificationTarget("pc-1", "sess-1", "evt-done")),
+            harness.poster.targets,
+        )
+    }
+
+    @Test
+    fun fcmWaitingPostsImmediatelyWithGenericBodyAndTarget() {
+        val harness = Harness()
+        harness.coordinator.onPush(
+            FcmDataPayload("wait-fcm", PUSH_TYPE_AGENT_WAITING, "pc-1", "sess-1"),
+        )
+        assertTrue(harness.scheduler.tasks.isEmpty())
+        assertEquals(
+            listOf("wait-fcm" to NotificationContent("Cursor is waiting", "Open the app to continue.")),
+            harness.poster.posted,
+        )
+        assertEquals(listOf(NotificationTarget("pc-1", "sess-1", "wait-fcm")), harness.poster.targets)
+    }
+
+    @Test
+    fun fcmGenericBodiesDoNotUseReasonOrCommand() {
+        val harness = Harness()
+        harness.coordinator.onPush(
+            FcmDataPayload("perm-fcm", PUSH_TYPE_PERMISSION_REQUESTED, "pc-1", "sess-1"),
+        )
+        harness.coordinator.onPush(
+            FcmDataPayload("fail-fcm", PUSH_TYPE_AGENT_FAILED, "pc-1", ""),
+        )
+        assertEquals("Open the app to continue.", harness.poster.posted[0].second.body)
+        assertEquals("Cursor could not finish the task.", harness.poster.posted[1].second.body)
+        assertEquals("", harness.poster.targets[1]!!.sessionId)
+    }
+
+    @Test
+    fun waitingClaimsAtFireSoFcmWinsRace() {
+        val harness = Harness()
+        harness.coordinator.onEvent(chatEvent("agent.waiting", """{"reason":"hold"}""", eventId = "wait-1"))
+        harness.coordinator.onPush(
+            FcmDataPayload("wait-1", PUSH_TYPE_AGENT_WAITING, "pc-1", "sess-1"),
+        )
+        assertEquals(listOf("wait-1"), harness.poster.posted.map { it.first })
+        assertEquals("Open the app to continue.", harness.poster.posted.single().second.body)
+        harness.scheduler.tasks.single().fire()
+        assertEquals(1, harness.poster.posted.size)
+    }
+
+    @Test
+    fun waitingCancelDuringClaimDoesNotPost() {
+        val store = GatedClaimStore(gateEventId = "wait-race")
+        val harness = Harness(store = store)
+        harness.coordinator.onEvent(chatEvent("agent.waiting", """{"reason":null}""", eventId = "wait-race"))
+        val fireThread = Thread { harness.scheduler.tasks.single().fire() }
+        fireThread.start()
+        assertTrue(store.started.await(5, TimeUnit.SECONDS))
+        harness.coordinator.onEvent(chatEvent("agent.completed", """{"reason":null}""", eventId = "done-race"))
+        store.release.countDown()
+        fireThread.join(5_000)
+        assertEquals(listOf("done-race"), harness.poster.posted.map { it.first })
+    }
+
+    @Test
+    fun claimFailureDoesNotNotify() {
+        val harness = Harness(store = RejectClaimStore())
+        harness.coordinator.onEvent(chatEvent("agent.completed", """{"reason":null}""", eventId = "evt-done"))
+        harness.coordinator.onPush(
+            FcmDataPayload("evt-fcm", PUSH_TYPE_AGENT_COMPLETED, "pc-1", "sess-1"),
+        )
+        assertTrue(harness.poster.posted.isEmpty())
+    }
+
+    @Test
+    fun unverifiedMachineOmitsTargetButStillNotifies() {
+        val harness = Harness(machineId = null)
+        harness.coordinator.onEvent(chatEvent("agent.completed", """{"reason":null}""", eventId = "evt-done"))
+        assertEquals(listOf("evt-done"), harness.poster.posted.map { it.first })
+        assertEquals(listOf(null), harness.poster.targets)
+    }
+
+    private class Harness(
+        val store: ReliabilityStore = VolatileReliabilityStore(),
+        machineId: String? = "pc-1",
+    ) {
         val poster = RecordingPoster()
         val scheduler = ManualScheduleAfter()
-        val coordinator = PushNotificationCoordinator(poster, scheduler)
+        val coordinator =
+            PushNotificationCoordinator(
+                poster,
+                scheduler,
+                store,
+                { machineId },
+            )
     }
 
     private class RecordingPoster : NotificationPoster {
         var enabled: Boolean = true
         val posted = mutableListOf<Pair<String, NotificationContent>>()
+        val targets = mutableListOf<NotificationTarget?>()
 
         override fun notificationsEnabled(): Boolean = enabled
 
-        override fun post(eventId: String, content: NotificationContent) {
+        override fun post(eventId: String, content: NotificationContent, target: NotificationTarget?) {
             posted += eventId to content
+            targets += target
+        }
+    }
+
+    private class RejectClaimStore : ReliabilityStore by VolatileReliabilityStore() {
+        override suspend fun claimNotificationEventId(eventId: String): Boolean = false
+    }
+
+    private class GatedClaimStore(
+        private val gateEventId: String,
+        private val inner: ReliabilityStore = VolatileReliabilityStore(),
+    ) : ReliabilityStore by inner {
+        val started = CountDownLatch(1)
+        val release = CountDownLatch(1)
+
+        override suspend fun claimNotificationEventId(eventId: String): Boolean {
+            if (eventId == gateEventId) {
+                started.countDown()
+                release.await(5, TimeUnit.SECONDS)
+            }
+            return inner.claimNotificationEventId(eventId)
         }
     }
 

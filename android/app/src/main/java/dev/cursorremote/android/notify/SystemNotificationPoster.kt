@@ -40,18 +40,24 @@ class SystemNotificationPoster(
         return notificationManager.areNotificationsEnabled()
     }
 
-    override fun post(eventId: String, content: NotificationContent) {
+    override fun post(eventId: String, content: NotificationContent, target: NotificationTarget?) {
         val intent =
             Intent(appContext, MainActivity::class.java).apply {
+                action = notificationPendingIntentAction(eventId)
                 flags =
                     Intent.FLAG_ACTIVITY_NEW_TASK or
                         Intent.FLAG_ACTIVITY_SINGLE_TOP or
                         Intent.FLAG_ACTIVITY_CLEAR_TOP
+                if (target != null) {
+                    putExtra(NotificationTarget.EXTRA_MACHINE_ID, target.machineId)
+                    putExtra(NotificationTarget.EXTRA_SESSION_ID, target.sessionId)
+                    putExtra(NotificationTarget.EXTRA_EVENT_ID, target.eventId)
+                }
             }
         val pendingIntent =
             PendingIntent.getActivity(
                 appContext,
-                0,
+                eventId.hashCode(),
                 intent,
                 PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
             )
@@ -72,3 +78,6 @@ class SystemNotificationPoster(
         const val NOTIFICATION_ID = 303
     }
 }
+
+internal fun notificationPendingIntentAction(eventId: String): String =
+    "dev.cursorremote.android.notify.OPEN_EVENT:$eventId"

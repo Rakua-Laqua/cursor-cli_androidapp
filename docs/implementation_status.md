@@ -7,7 +7,7 @@
 - 対象リポジトリ: `Rakua-Laqua/cursor-cli_androidapp`
 - ブランチ: `main`
 - 直前リリース基準（v1.3.0）: `c7bff3137511396d8a86d27a341fcddb70f8b316`（`v1.3.0にアップデート`）
-- パッケージ版: `1.19.0`（Android `versionCode` 33 / `versionName` 1.19.0）
+- パッケージ版: `1.20.0`（Android `versionCode` 34 / `versionName` 1.20.0）
 
 この文書は「いまどこまで動くか」の正本である。設計の正本は仕様書、作業順の正本は実装計画である。計画書の未着手タスクを消さない。完了扱いにできるのはリリース済みの範囲だけである。
 
@@ -15,7 +15,7 @@
 
 ## 1. いまの結論
 
-**Cursor Desktop なしで、PC 上の Local Daemon だけから Workspace / Session を操作し、Android からメモリ内 Chat を送受信し、実 ACP の permission を Approve / Reject でき、選択中 Workspace の変更 Diff を手動で確認でき、Assistant 応答内の workspace ファイルを read-only Viewer で開け、background かつ process / 既存 WebSocket 生存中に対象 event を in-process 通知でき、Chat header の Model Picker で選択中 Session の動的 catalog からモデルを切り替え、不要なモデルを端末内で非表示にし、valid `session.context_updated` を受信したときだけ Context 使用量を表示でき、valid `session.usage_updated` の cost があるときだけ独立した Usage を表示でき、Chat 画面から Push-to-Talk で本体マイク録音と文字起こし（Android 13+）を行い Prompt 編集へ反映でき、同一プロセス内の明示フォアグラウンド Reconnect で missed event を replay または gap resync できる。** Relay 経由の Command / Event 中継も localhost では動く。Device Pairing は v1.4.0、Android Skeleton は v1.5.0、Workspace / Session UI は v1.6.0、Chat は v1.7.0、Permission Flow は v1.8.0、Diff Pipeline は v1.9.0、応答内ファイルリンクは v1.10.0、in-process 通知は v1.11.0、動的 Model Catalog は v1.12.0、Model Visibility は v1.13.0、Session Context Usage は v1.14.0、Context Breakdown は v1.15.0、Session Cost は v1.16.0、Audio Routing 診断 / Gate D は v1.17.1、Push-to-Talk 音声入力は v1.18.0、フォアグラウンド process-memory の Event Replay / Reconnect は v1.19.0。QR カメラ、TLS、Chat 履歴の永続化、process 死亡後の復元、Android バックグラウンド WebSocket reconnect / FCM は未完。個人 Account Usage は公式安定 interface が無く dormant。Phase 5 は完了。Phase 6 は進行中（TASK-600 完了、次は TASK-601）。
+**Cursor Desktop なしで、PC 上の Local Daemon だけから Workspace / Session を操作し、Android からメモリ内 Chat を送受信し、実 ACP の permission を Approve / Reject でき、選択中 Workspace の変更 Diff を手動で確認でき、Assistant 応答内の workspace ファイルを read-only Viewer で開け、background かつ process / 既存 WebSocket 生存中に対象 event を in-process 通知でき、Chat header の Model Picker で選択中 Session の動的 catalog からモデルを切り替え、不要なモデルを端末内で非表示にし、valid `session.context_updated` を受信したときだけ Context 使用量を表示でき、valid `session.usage_updated` の cost があるときだけ独立した Usage を表示でき、Chat 画面から Push-to-Talk で本体マイク録音と文字起こし（Android 13+）を行い Prompt 編集へ反映でき、同一プロセス内の明示フォアグラウンド Reconnect で missed event を replay または gap resync できる。** Daemon 再起動後は metadata から Workspace / Session / mapping / device auth を復元し、ACP 異常終了後は bounded recovery する。Android は Room v4 で選択 / cursor / 通知 dedup を永続化し、foreground 時だけ reconnect / catch-up、background 時は FCM wake（設定がある場合）と厳密な deep link をコード実装済み。Relay 経由の Command / Event 中継も localhost では動く。Device Pairing は v1.4.0、Android Skeleton は v1.5.0、Workspace / Session UI は v1.6.0、Chat は v1.7.0、Permission Flow は v1.8.0、Diff Pipeline は v1.9.0、応答内ファイルリンクは v1.10.0、in-process 通知は v1.11.0、動的 Model Catalog は v1.12.0、Model Visibility は v1.13.0、Session Context Usage は v1.14.0、Context Breakdown は v1.15.0、Session Cost は v1.16.0、Audio Routing 診断 / Gate D は v1.17.1、Push-to-Talk 音声入力は v1.18.0、フォアグラウンド process-memory の Event Replay / Reconnect は v1.19.0、Phase 6 TASK-601〜604 は v1.20.0。QR カメラ、TLS、Chat 本文永続化は未完。個人 Account Usage は公式安定 interface が無く dormant。Phase 5 は完了。Phase 6 はコード実装完了、外部実機検証待ち。live FCM 配送・通知 tap 実機・Doze 配送は未実施。
 
 | 区分 | 状態 |
 | --- | --- |
@@ -44,12 +44,16 @@
 | TASK-502 STT Adapter | **完了・v1.18.0** |
 | TASK-503 Voice Prompt UX | **完了・v1.18.0** |
 | TASK-600 Event Replay / Reconnect | **完了・v1.19.0**。フォアグラウンド process-memory のみ |
+| TASK-601 Daemon Restart Recovery | **コード実装完了・v1.20.0**。EventLog は非永続、再起動後 catch-up は gap |
+| TASK-602 Cursor Process Recovery | **コード実装完了・v1.20.0** |
+| TASK-603 Security Hardening | **コード実装完了・v1.20.0** |
+| TASK-604 Android Background Reliability | **コード実装完了・v1.20.0**。live FCM / 通知 tap / Doze は未実施 |
 | Phase 3 | TASK-300〜303 完了 |
 | Phase 4 | **完了・v1.16.0** |
 | Phase 5 | **完了・v1.18.0** |
-| Phase 6 | **進行中**。TASK-600 完了・v1.19.0。次は TASK-601 |
+| Phase 6 | **コード実装完了・外部実機検証待ち・v1.20.0** |
 
-次の作業は Phase 6 TASK-601 Daemon Restart Recovery である。TASK-600 のフォアグラウンド process-memory replay / reconnect は v1.19.0 で完了。Camera / TLS / Chat 履歴の永続化 / process 死亡後の復元 / Android バックグラウンド reconnect / FCM は未完。
+次の作業は TASK-604 の live FCM / notification tap / Doze 実機検証である。Phase 6 のコード実装は v1.20.0。Camera / TLS / Chat 本文永続化は未完。未定義の Phase 7 は無い。
 
 ---
 
@@ -124,14 +128,20 @@
 
 - 同一プロセス内の明示フォアグラウンド Reconnect と event replay。Machine ごとの process メモリ cursor で missed event を replay するか、gap なら状態 resync と警告を出す。選択中 Workspace / Session とメモリ内 Chat は残す。永続履歴でもバックグラウンド WebSocket 復旧でもない。詳細は `CHANGELOG.md` の 1.19.0。
 
+### 動く（v1.20.0・コード実装。live FCM / 実機は未検証）
+
+- Daemon 再起動後の metadata 復元（Workspace / Session / Cursor session mapping / device auth）。EventLog 非永続のため catch-up は `gap`。会話本文の独自保存なし。
+- ACP 異常終了後の bounded process recovery。in-flight は一度失敗し、prompt / permission は自動再実行しない。
+- Workspace canonical 境界、symlink 差替え、sensitive basename、device auth / replay、permission fail-closed の強化。ACP stderr 本文は記録しない。
+- Android Room v4 の選択 / machine 別 cursor / `needsCatchUp` / 通知 `eventId` dedup。foreground 限定 reconnect / catch-up。任意 FCM data-only high priority、共有永続 dedup、厳密な notification deep link。通知から prompt / permission は自動再実行しない。運用設定は `relay/README.md` と `android/README.md`。
+
 ### まだない
 
+- Chat 本文の永続化。v1.20.0 の Room reliability（選択 / cursor / 通知 dedup）とは別物。
+- live FCM 配送、通知 tap 実機、Doze 配送（コードはあるが、実 Firebase project / access token / `google-services.json` / 実機が無く未実施。未観測を成功としない）。
+- TLS / インターネット公開用の認証。`/machine` は localhost の非認証 `ws://` のまま。
 - Pairing の CLI / QR 表示 UI（`remote-dev` に pairing サブコマンドはない）。
 - Android の QR カメラ。
-- TLS / インターネット公開用の認証。`/machine` は localhost の非認証 `ws://` のまま。
-- Chat 履歴の永続化と process 死亡後の復元。v1.19.0 のフォアグラウンド process-memory replay とは別物。
-- FCM、Android バックグラウンド WebSocket reconnect、notification deep link、Doze（TASK-604）。
-- Daemon 再起動後の EventLog / セッション復旧（TASK-601）。
 - Account Usage（TASK-405）は公式安定 interface が無く dormant。File content 保存。
 - 音声入力マイク設定（自動 / Bluetooth 機器切替。現状は本体マイク固定）。
 - Diff の agent 完了連動の自動更新。
@@ -145,6 +155,7 @@
 状態の意味:
 
 - **リリース済み**: パッケージ版 v1.4.0 までに含まれるバックエンド。v1.3.0 の基準コミットは `c7bff3137511396d8a86d27a341fcddb70f8b316`。
+- **実装済み v1.20.0**: TASK-601〜604（コード実装完了、外部実機検証待ち）。
 - **実装済み v1.19.0**: TASK-600 Event Replay / Reconnect（フォアグラウンド process-memory）。
 - **実装済み v1.16.0**: TASK-404 Session Cost、TASK-405 Account Usage capability gate（dormant）。
 - **実装済み v1.15.0**: TASK-403 Context Breakdown。
@@ -167,7 +178,7 @@
 | TASK-000 | `android/` `daemon/` `relay/` `protocol/` `docs/` の module boundary、format / lint | リリース済み |
 | TASK-001 | Remote Protocol の Event / Command 型と JSON 境界 | リリース済み。v1.3.0 で `command` / `event` / `result` frame を追加 |
 
-Android は TASK-600 まで実装済み。Phase 4・Phase 5 は完了し、Gate B / C / D は通過。Phase 6 は進行中。
+Android は TASK-604 までコード実装済み。Phase 4・Phase 5 は完了し、Gate B / C / D は通過。Phase 6 はコード実装完了・外部実機検証待ち。
 
 ### Phase 1 — Cursor CLI Local Core（Milestone 1）
 
@@ -205,7 +216,7 @@ Phase 2 の Chat は v1.7.0。Gate B は 2026-08-22 に通過。実機記録は 
 
 ### Phase 3 以降
 
-TASK-300 Permission Flow は **v1.8.0 で完了**。Gate C 通過。TASK-301 Diff Pipeline は **v1.9.0 で完了**。TASK-302 Cursor Response File Links は **v1.10.0 で完了**。TASK-303 Push Notifications は **v1.11.0 で完了**。Phase 3 はここまで。TASK-400 Dynamic Model Catalog は **v1.12.0 で完了**。TASK-401 Model Visibility は **v1.13.0 で完了**。TASK-402 Session Context Usage は **v1.14.0 で完了**。TASK-403 Context Breakdown は **v1.15.0 で完了**。TASK-404 Session Cost は **v1.16.0 で完了**。TASK-405 Account Usage capability は **v1.16.0 で dormant gate 完了**。Phase 4 はここまで。Phase 5 の TASK-500〜503 は **v1.18.0 で完了**（TASK-500 は Gate D 通過、TASK-501 Push-to-Talk Recorder、TASK-502 STT Adapter、TASK-503 Voice Prompt UX）。Phase 6 の TASK-600 は **v1.19.0 で完了**。Phase 6 は未完了で、次は TASK-601。
+TASK-300 Permission Flow は **v1.8.0 で完了**。Gate C 通過。TASK-301 Diff Pipeline は **v1.9.0 で完了**。TASK-302 Cursor Response File Links は **v1.10.0 で完了**。TASK-303 Push Notifications は **v1.11.0 で完了**。Phase 3 はここまで。TASK-400 Dynamic Model Catalog は **v1.12.0 で完了**。TASK-401 Model Visibility は **v1.13.0 で完了**。TASK-402 Session Context Usage は **v1.14.0 で完了**。TASK-403 Context Breakdown は **v1.15.0 で完了**。TASK-404 Session Cost は **v1.16.0 で完了**。TASK-405 Account Usage capability は **v1.16.0 で dormant gate 完了**。Phase 4 はここまで。Phase 5 の TASK-500〜503 は **v1.18.0 で完了**（TASK-500 は Gate D 通過、TASK-501 Push-to-Talk Recorder、TASK-502 STT Adapter、TASK-503 Voice Prompt UX）。Phase 6 の TASK-600 は **v1.19.0 で完了**。TASK-601〜604 は **v1.20.0 でコード実装完了**。Phase 6 は外部実機検証待ち。次は TASK-604 の live FCM / notification tap / Doze 実機検証。
 
 ---
 
@@ -430,7 +441,31 @@ ACP `usage_update` の structured `breakdown` 配列を防御的に `session.con
 
 ## 7.12 TASK-600（v1.19.0）
 
-同一プロセス内のフォアグラウンド Event Replay / Reconnect。永続 Chat 履歴でも TASK-604 のバックグラウンド reconnect でもない。Phase 6 は未完了。次は TASK-601。詳細は `CHANGELOG.md` の 1.19.0。
+同一プロセス内のフォアグラウンド Event Replay / Reconnect。永続 Chat 履歴でもバックグラウンド WebSocket 常駐でもない。後続は v1.20.0。詳細は `CHANGELOG.md` の 1.19.0。
+
+---
+
+## 7.13 TASK-601（v1.20.0）
+
+Daemon 再起動後に Workspace / Session / Cursor session mapping / device auth を metadata から復元する。EventLog は永続化せず、再起動後 catch-up は `gap`。会話本文の独自保存はしない。詳細は `daemon/README.md` と `CHANGELOG.md` の 1.20.0。
+
+---
+
+## 7.14 TASK-602（v1.20.0）
+
+ACP 異常終了後の bounded process recovery。generation 隔離、`initialize` 後の load 可能 Session 再 load。in-flight command は一度だけ失敗し、prompt / permission は自動再実行しない。shutdown 競合は安全に終了する。詳細は `daemon/README.md`。
+
+---
+
+## 7.15 TASK-603（v1.20.0）
+
+Workspace canonical 境界、symlink 差替え、sensitive basename、device auth / replay、permission fail-closed を強化。ACP stderr 本文は記録せず抑止通知だけ。詳細は `daemon/README.md`。
+
+---
+
+## 7.16 TASK-604（v1.20.0）
+
+Room v4 の reliability 永続化、foreground 限定 reconnect / catch-up、任意 FCM wake、共有永続 dedup、厳密な notification deep link。通知から prompt / permission は自動再実行しない。live FCM / 通知 tap / Doze は未実施。端末設定は `android/README.md`、Relay 運用は `relay/README.md`、payload は `protocol/README.md`。
 
 ---
 
@@ -473,6 +508,9 @@ ACP `usage_update` の structured `breakdown` 配列を防御的に `session.con
 | `npm test` v1.19.0 | 成功 | protocol 20 / daemon 136 / relay 9、fail 0。`npm run lint` pass。targeted Prettier pass |
 | Gradle v1.19.0 | 成功 | `testDebugUnitTest` / `assembleDebug` / `lintDebug` pass。92 unit tests、fail 0 |
 | Android 実機 Event Replay / Reconnect（TASK-600） | 未実施 | TASK-600 の実機検証は未実施 |
+| `npm test` v1.20.0 | 成功 | protocol 22 / daemon 142 / relay 14、全件 pass。`npm run lint` pass。targeted Prettier pass。`git diff --check` pass |
+| Gradle v1.20.0 | 成功 | `:app:assembleDebug :app:testDebugUnitTest :app:lintDebug --rerun-tasks` BUILD SUCCESSFUL、53 actionable tasks、JVM unit 134、fail / error / skipped 0、lint error 0。lint の Firebase 推移 fragment 1.1.0 は `androidx.fragment:fragment:1.8.5` 明示で解消 |
+| live FCM 配送 / 通知 tap 実機 / Doze（TASK-604） | 未実施 | 実 Firebase project / access token / `google-services.json` / 実機が無い。未観測を成功としない |
 
 Gate B（2026-08-22、SM-S928Q / Android 16）: localhost Relay と adb reverse。既存 pairing の再認証、Workspace / Session resume、terminal 前の逐次 Assistant 表示、Stop 後の `interrupted` / `stopped` を確認した。TLS とインターネット公開は使っていない。
 
@@ -488,12 +526,12 @@ TASK-303（2026-08-22、同端末）: localhost Relay と adb reverse。foregrou
 
 ## 9. モジュール別の現状
 
-| モジュール | 実装済み v1.19.0 | 未着手 |
+| モジュール | 実装済み v1.20.0 | 未着手 |
 | --- | --- | --- |
-| `protocol/` | Event / Command 型、Remote frame、Pairing 型・証明・QR payload、permission requested/resolved と permissionId のみの approve/reject、diff snapshot payload、`file.read` / FileContent payload、model catalog / select payload、`session.context_updated` used/size、breakdown categories payload、`session.usage_updated {cost}`、`sync.catch_up`。`agent.waiting` は既存共有型 | Android 向け追加画面用の型は不要な範囲で増やさない |
-| `daemon/` | ACP、Workspace、metadata、`remote-dev`、Relay outbound、想定外切断後の bounded backoff 再接続、process 内 EventLog と catch-up、`PairingManager`、device 永続化、PermissionBridge（fail-closed）、bounded Git DiffPipeline、session-bound `file.read`、ACP models / configOptions からの防御的 catalog と `session/set_config_option`、structured `usage_update` → `session.context_updated`、structured breakdown の防御的変換、valid `usage_update.cost` → `session.usage_updated` | pairing CLI、`agent.waiting` emitter、Daemon 再起動後の EventLog 復旧（TASK-601） |
-| `relay/` | WebSocket routing / correlation / heartbeat、`/client` の pairing ゲート。generic / stateless のまま。replay 結果は unicast | TLS |
-| `android/` | TASK-204 Chat（メモリ内）、TASK-300 Permission approval card、TASK-301 手動 Diff UI、TASK-302 応答内リンクと read-only Viewer、TASK-303 in-process 通知、TASK-400 Chat header Model Picker、TASK-401 Model Visibility / Manage Models、TASK-402 条件付き Context 表示、TASK-403 折りたたみ Context Breakdown 表示、TASK-404 独立 Usage / This session dialog、TASK-500 debug-only audio routing 診断、TASK-501 Push-to-Talk Recorder、TASK-502 STT Adapter、TASK-503 Voice Prompt UX、TASK-600 明示フォアグラウンド Reconnect（process-memory cursor） | QR カメラ、Chat 履歴永続化、FCM / バックグラウンド reconnect / deep link / Doze（TASK-604）、マイク切替設定 |
+| `protocol/` | Event / Command 型、Remote frame、Pairing 型・証明・QR payload、permission requested/resolved と permissionId のみの approve/reject、diff snapshot payload、`file.read` / FileContent payload、model catalog / select payload、`session.context_updated` used/size、breakdown categories payload、`session.usage_updated {cost}`、`sync.catch_up`、`transport_register`、strict FCM data payload。`agent.waiting` は既存共有型 | Android 向け追加画面用の型は不要な範囲で増やさない |
+| `daemon/` | ACP、Workspace、metadata、再起動復元（EventLog 非永続）、ACP bounded process recovery、`remote-dev`、Relay outbound、想定外切断後の bounded backoff 再接続、process 内 EventLog と catch-up、`PairingManager`、device 永続化、PermissionBridge（fail-closed）、bounded Git DiffPipeline、session-bound `file.read`、ACP models / configOptions からの防御的 catalog と `session/set_config_option`、structured `usage_update` → `session.context_updated`、structured breakdown の防御的変換、valid `usage_update.cost` → `session.usage_updated`、canonical / symlink / sensitive / auth / replay 強化、ACP stderr 本文非記録 | pairing CLI、`agent.waiting` emitter |
+| `relay/` | WebSocket routing / correlation / heartbeat、`/client` の pairing ゲート。任意 FCM HTTP v1（両環境変数時のみ）、RAM token registry、data-only HIGH。generic / stateless のまま。replay 結果は unicast | TLS |
+| `android/` | TASK-204 Chat（メモリ内）、TASK-300 Permission approval card、TASK-301 手動 Diff UI、TASK-302 応答内リンクと read-only Viewer、TASK-303 in-process 通知、TASK-400 Chat header Model Picker、TASK-401 Model Visibility / Manage Models、TASK-402 条件付き Context 表示、TASK-403 折りたたみ Context Breakdown 表示、TASK-404 独立 Usage / This session dialog、TASK-500 debug-only audio routing 診断、TASK-501 Push-to-Talk Recorder、TASK-502 STT Adapter、TASK-503 Voice Prompt UX、TASK-600 明示フォアグラウンド Reconnect、TASK-604 Room v4 reliability / 任意 FCM / deep link（live 未検証） | QR カメラ、Chat 本文永続化、マイク切替設定 |
 | `docs/` | 仕様、計画、ACP 実測、Local E2E、本ファイル | — |
 
 ---
@@ -503,7 +541,7 @@ TASK-303（2026-08-22、同端末）: localhost Relay と adb reverse。foregrou
 計画書と Gate を崩さない。
 
 ```text
-TASK-601 Daemon Restart Recovery
+TASK-604 live FCM / notification tap / Doze 実機検証
 ```
 
-Phase 6 は進行中。TASK-600 は v1.19.0 で完了。次は TASK-601。Camera / TLS / Chat 履歴の永続化 / process 死亡後の復元 / Android バックグラウンド reconnect / FCM は未完。
+Phase 6 はコード実装完了・外部実機検証待ち。未定義の Phase 7 は無い。Camera / TLS / Chat 本文永続化は対象外 / 未実装のまま。

@@ -12,7 +12,12 @@ import type {
   SessionStatus,
 } from '@cursor-remote/protocol';
 
-import type { AcpIncomingRequest, AcpNotification, AcpProcess } from '../acp/process.js';
+import type {
+  AcpExitInfo,
+  AcpIncomingRequest,
+  AcpNotification,
+  AcpProcess,
+} from '../acp/process.js';
 import { PermissionBridge } from '../permissions/permission-bridge.js';
 import type { MetadataStore, PersistedSession } from '../store/metadata-store.js';
 import type { WorkspaceManager } from '../workspace/workspace-manager.js';
@@ -58,6 +63,11 @@ const TERMINAL_SESSION_STATUSES: ReadonlySet<SessionStatus> = new Set([
 export class AcpSessionAdapter {
   private handshakeDone = false;
   private handshakePromise: Promise<void> | undefined;
+  private stopping = false;
+  private recoveryFailed = false;
+  private sessionLoadEpoch = 0;
+  private recovery: Promise<void> | undefined;
+  private readonly loadedAtEpoch = new Map<string, number>();
   private readonly sessions = new Map<string, TrackedSession>();
   private readonly remoteIdByCursorId = new Map<string, string>();
   private readonly listeners = new Set<(event: KnownRemoteEvent) => void>();
@@ -75,17 +85,7 @@ export class AcpSessionAdapter {
       onResolved: (notice) => this.handlePermissionResolved(notice),
     });
     this.acp.onNotification((notification) => this.handleNotification(notification));
-    this.acp.onExit((info) => {
-      this.permissions.rejectAllPending();
-      if (info.expected) {
-        return;
-      }
-      for (const session of this.sessions.values()) {
-        if (session.status === 'running' || session.status === 'waiting_approval') {
-          this.finish(session, 'failed', 'agent.failed', 'ACP process exited');
-        }
-      }
-    });
+    this.acp.onExit((info) => this.handleProcessExit(info));
     this.hydrate();
   }
 
@@ -108,7 +108,18 @@ export class AcpSessionAdapter {
     return this.permissions.getPendingSnapshot(remoteSessionId);
   }
 
+  async shutdown(): Promise<void> {
+    this.stopping = true;
+    const recovery = this.recovery;
+    await this.acp.shutdown();
+    if (recovery !== undefined) {
+      await recovery;
+    }
+    await this.acp.shutdown();
+  }
+
   async create(input: CreateSessionInput): Promise<SessionPayload> {
+    await this.waitForReady();
     const workspace = this.workspaces.require(input.workspaceId);
     await this.ensureHandshake();
     const cwd = this.workspaces.resolveTrustedPath(workspace.workspaceId);
@@ -135,6 +146,7 @@ export class AcpSessionAdapter {
       configOptions: catalog.configOptions,
     };
     this.track(session);
+    this.markAttached(session);
     this.workspaces.markUsed(workspace.workspaceId);
     this.emitSession('session.created', session);
     this.emitCatalog(session);
@@ -146,23 +158,13 @@ export class AcpSessionAdapter {
   }
 
   async load(remoteSessionId: string): Promise<SessionPayload> {
-    await this.ensureHandshake();
+    await this.waitForReady();
     const session = this.requireSession(remoteSessionId);
     assertPromptNotInProgress(session);
-    const cwd = this.workspaces.resolveTrustedPath(session.workspaceId);
-    const loadResult = await this.acp.request('session/load', {
-      sessionId: session.cursorSessionId,
-      cwd,
-      mcpServers: [],
-    });
+    await this.ensureHandshake();
+    await this.attachSession(session);
     session.status = 'idle';
     session.updatedAt = nowIso();
-    session.workspacePath = cwd;
-    const catalog = readModelCatalog(loadResult);
-    session.selectedModelId = catalog.currentModelId;
-    session.availableModels = catalog.models;
-    session.configOptions = catalog.configOptions;
-    this.workspaces.markUsed(session.workspaceId);
     this.emitSession('session.loaded', session);
     this.emitStatus(session, 'idle');
     this.emitCatalog(session);
@@ -182,25 +184,34 @@ export class AcpSessionAdapter {
   }
 
   async send(remoteSessionId: string, text: string): Promise<void> {
+    await this.waitForReady();
     const session = this.requireSession(remoteSessionId);
+    await this.ensureAttached(session);
     await this.runPrompt(session, text);
   }
 
   async cancel(remoteSessionId: string): Promise<void> {
+    await this.waitForReady();
     const session = this.requireSession(remoteSessionId);
+    await this.ensureAttached(session);
     this.permissions.rejectPendingForSession(remoteSessionId);
     this.acp.notify('session/cancel', { sessionId: session.cursorSessionId });
   }
 
-  private listModels(remoteSessionId: string): ModelCatalogPayload {
-    return toCatalogPayload(this.requireSession(remoteSessionId));
+  private async listModels(remoteSessionId: string): Promise<ModelCatalogPayload> {
+    await this.waitForReady();
+    const session = this.requireSession(remoteSessionId);
+    await this.ensureAttached(session);
+    return toCatalogPayload(session);
   }
 
   private async selectModel(
     remoteSessionId: string,
     modelId: string,
   ): Promise<ModelCatalogPayload> {
+    await this.waitForReady();
     const session = this.requireSession(remoteSessionId);
+    await this.ensureAttached(session);
     assertPromptNotInProgress(session);
     if (modelId.length === 0) {
       throw new Error('modelId must be a string');
@@ -305,6 +316,130 @@ export class AcpSessionAdapter {
       );
     }
     await this.handshakePromise;
+  }
+
+  private async waitForReady(): Promise<void> {
+    if (this.stopping) {
+      throw new Error('Daemon is stopping');
+    }
+    const recovery = this.recovery;
+    if (recovery !== undefined) {
+      await recovery;
+    }
+    if (this.stopping) {
+      throw new Error('Daemon is stopping');
+    }
+    if (this.acp.getState() !== 'running') {
+      throw new Error('ACP process is not running');
+    }
+  }
+
+  private handleProcessExit(info: AcpExitInfo): void {
+    this.permissions.rejectAllPending();
+    if (info.expected) {
+      return;
+    }
+    this.sessionLoadEpoch += 1;
+    this.handshakeDone = false;
+    this.handshakePromise = undefined;
+    for (const session of this.sessions.values()) {
+      if (session.status === 'running' || session.status === 'waiting_approval') {
+        this.finish(session, 'failed', 'agent.failed', 'ACP process exited');
+      }
+    }
+    this.queueRecovery();
+  }
+
+  private queueRecovery(): void {
+    if (this.stopping || this.recoveryFailed || this.recovery !== undefined) {
+      return;
+    }
+    this.recovery = this.runRecovery()
+      .catch(() => {
+        this.recoveryFailed = true;
+      })
+      .finally(() => {
+        this.recovery = undefined;
+      });
+  }
+
+  private async runRecovery(): Promise<void> {
+    if (this.stopping) {
+      return;
+    }
+    try {
+      await this.acp.respawn();
+      if (this.stopping) {
+        await this.acp.shutdown();
+        return;
+      }
+      await this.ensureHandshake();
+      if (this.stopping) {
+        await this.acp.shutdown();
+        return;
+      }
+      await this.reloadKnownSessions();
+    } catch (error) {
+      if (this.stopping) {
+        await this.acp.shutdown().catch(() => undefined);
+        return;
+      }
+      throw error;
+    }
+  }
+
+  private async reloadKnownSessions(): Promise<void> {
+    for (const session of [...this.sessions.values()]) {
+      if (this.stopping) {
+        return;
+      }
+      try {
+        await this.attachSession(session);
+      } catch {
+        this.disconnectSession(session);
+      }
+    }
+  }
+
+  private async ensureAttached(session: TrackedSession): Promise<void> {
+    await this.ensureHandshake();
+    if (this.loadedAtEpoch.get(session.remoteSessionId) === this.sessionLoadEpoch) {
+      return;
+    }
+    await this.attachSession(session);
+  }
+
+  private async attachSession(session: TrackedSession): Promise<void> {
+    const cwd = this.workspaces.resolveTrustedPath(session.workspaceId);
+    const loadResult = await this.acp.request('session/load', {
+      sessionId: session.cursorSessionId,
+      cwd,
+      mcpServers: [],
+    });
+    session.workspacePath = cwd;
+    const catalog = readModelCatalog(loadResult);
+    session.selectedModelId = catalog.currentModelId;
+    session.availableModels = catalog.models;
+    session.configOptions = catalog.configOptions;
+    this.markAttached(session);
+    this.workspaces.markUsed(session.workspaceId);
+    this.persist();
+  }
+
+  private markAttached(session: TrackedSession): void {
+    this.loadedAtEpoch.set(session.remoteSessionId, this.sessionLoadEpoch);
+  }
+
+  private disconnectSession(session: TrackedSession): void {
+    this.loadedAtEpoch.delete(session.remoteSessionId);
+    if (session.status === 'disconnected') {
+      this.persist();
+      return;
+    }
+    session.status = 'disconnected';
+    session.updatedAt = nowIso();
+    this.emitStatus(session, 'disconnected');
+    this.persist();
   }
 
   private async performHandshake(): Promise<void> {
@@ -505,6 +640,7 @@ export class AcpSessionAdapter {
         // Leave unrestorable records on disk; do not expose them as live sessions.
       }
     }
+    this.persist();
   }
 
   private restoreOne(record: PersistedSession): void {

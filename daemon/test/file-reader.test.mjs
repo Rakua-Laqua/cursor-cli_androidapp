@@ -154,6 +154,25 @@ test('missing, directory, sensitive, binary, and invalid utf8 files are errors',
   }
 });
 
+test('file.read rejects private key basenames as sensitive', () => {
+  const allowedRoot = makeRoot();
+  const project = path.join(allowedRoot, 'app');
+  fs.mkdirSync(project);
+  fs.writeFileSync(path.join(project, 'id_ed25519'), 'SECRET=1\n');
+  const workspaces = new WorkspaceManager({ allowedRoots: [allowedRoot] });
+  const registered = workspaces.register(project);
+  assert.throws(
+    () => readWorkspaceFile(workspaces, registered.workspaceId, 'id_ed25519'),
+    FileReadError,
+  );
+  try {
+    readWorkspaceFile(workspaces, registered.workspaceId, 'id_ed25519');
+  } catch (error) {
+    assert.equal('content' in error, false);
+    assertNoAbsolutePath(error.message, [allowedRoot, project]);
+  }
+});
+
 test('truncates at max bytes on a valid utf8 boundary', async () => {
   const allowedRoot = makeRoot();
   const project = path.join(allowedRoot, 'app');

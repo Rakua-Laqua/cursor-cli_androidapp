@@ -105,13 +105,26 @@ export interface PairingResultFrame {
   readonly error: string | null;
 }
 
+export interface TransportRegisterFrame {
+  readonly kind: 'transport_register';
+  readonly requestId: string;
+  readonly fcmToken: string | null;
+  readonly appForeground: boolean;
+}
+
 export type TransportFrame =
   | RemoteFrame
   | AuthChallengeFrame
   | PairFrame
   | AuthProofFrame
   | PairingVerifyFrame
-  | PairingResultFrame;
+  | PairingResultFrame
+  | TransportRegisterFrame;
+
+const TRANSPORT_REGISTER_MAX_BYTES = 8192;
+const TRANSPORT_REGISTER_REQUEST_ID_MAX = 128;
+const FCM_TOKEN_MAX_CODE_UNITS = 4096;
+const FCM_TOKEN_CHARS = /^[A-Za-z0-9_.:-]+$/;
 
 export function parsePairingQrPayload(json: string): PairingQrPayload {
   return parsePairingQrRecord(JSON.parse(json));
@@ -341,9 +354,15 @@ export function parseTransportFrame(json: string): TransportFrame {
   if (kind === 'pairing_result') {
     return parsePairingResultFrame(parsed);
   }
+  if (kind === 'transport_register') {
+    if (Buffer.byteLength(json, 'utf8') > TRANSPORT_REGISTER_MAX_BYTES) {
+      throw new ProtocolParseError('transport_register exceeds 8192 bytes.');
+    }
+    return parseTransportRegisterFrame(parsed);
+  }
 
   throw new ProtocolParseError(
-    'kind must be command, event, result, auth_challenge, pair, auth_proof, pairing_verify, or pairing_result.',
+    'kind must be command, event, result, auth_challenge, pair, auth_proof, pairing_verify, pairing_result, or transport_register.',
   );
 }
 
@@ -363,7 +382,14 @@ export function serializeTransportFrame(frame: TransportFrame): string {
   if (frame.kind === 'pairing_verify') {
     return JSON.stringify(parsePairingVerifyFrame(frame));
   }
-  return JSON.stringify(parsePairingResultFrame(frame));
+  if (frame.kind === 'pairing_result') {
+    return JSON.stringify(parsePairingResultFrame(frame));
+  }
+  const json = JSON.stringify(parseTransportRegisterFrame(frame));
+  if (Buffer.byteLength(json, 'utf8') > TRANSPORT_REGISTER_MAX_BYTES) {
+    throw new ProtocolParseError('transport_register exceeds 8192 bytes.');
+  }
+  return json;
 }
 
 export function parseBase64UrlBytes(value: unknown, size: number, fieldName: string): Buffer {
@@ -515,6 +541,42 @@ function parsePairingResultFrame(
     throw new ProtocolParseError('failed pairing_result must have a non-empty error.');
   }
   return { kind: 'pairing_result', verificationId, ok: false, deviceId: null, error };
+}
+
+function parseTransportRegisterFrame(
+  value: Record<string, unknown> | TransportRegisterFrame,
+): TransportRegisterFrame {
+  const record = asRecord(value);
+  assertExactKeys(record, ['kind', 'requestId', 'fcmToken', 'appForeground']);
+  const requestId = requireNonEmptyString(record.requestId, 'requestId');
+  if (requestId.length > TRANSPORT_REGISTER_REQUEST_ID_MAX) {
+    throw new ProtocolParseError('requestId must be at most 128 characters.');
+  }
+  if (typeof record.appForeground !== 'boolean') {
+    throw new ProtocolParseError('appForeground must be a boolean.');
+  }
+  return {
+    kind: 'transport_register',
+    requestId,
+    fcmToken: parseFcmToken(record.fcmToken),
+    appForeground: record.appForeground,
+  };
+}
+
+function parseFcmToken(value: unknown): string | null {
+  if (value === null) {
+    return null;
+  }
+  if (typeof value !== 'string' || value.length === 0) {
+    throw new ProtocolParseError('fcmToken must be a non-empty string or null.');
+  }
+  if (value.length > FCM_TOKEN_MAX_CODE_UNITS) {
+    throw new ProtocolParseError('fcmToken must be at most 4096 characters.');
+  }
+  if (!FCM_TOKEN_CHARS.test(value)) {
+    throw new ProtocolParseError('fcmToken contains invalid characters.');
+  }
+  return value;
 }
 
 function parseBase64Url(value: unknown, fieldName: string): Buffer {

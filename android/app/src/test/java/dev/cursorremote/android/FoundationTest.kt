@@ -1,9 +1,15 @@
 package dev.cursorremote.android
 
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStore
 import dev.cursorremote.android.data.local.HiddenModelDao
 import dev.cursorremote.android.data.local.HiddenModelEntity
 import dev.cursorremote.android.data.local.MachineDao
 import dev.cursorremote.android.data.local.MachineEntity
+import dev.cursorremote.android.data.local.NavigationSelection
+import dev.cursorremote.android.data.local.ReliabilityStore
+import dev.cursorremote.android.data.local.VolatileReliabilityStore
 import dev.cursorremote.android.data.protocol.RemoteProtocol
 import dev.cursorremote.android.data.remote.RemoteConnectionState
 import dev.cursorremote.android.data.remote.RemoteRepository
@@ -12,6 +18,9 @@ import dev.cursorremote.android.data.transport.ConnectionState
 import dev.cursorremote.android.data.transport.TransportMessage
 import dev.cursorremote.android.data.transport.TransportMessageQueue
 import dev.cursorremote.android.data.transport.WebSocketTransport
+import dev.cursorremote.android.di.NOTIFICATION_TARGET_EVENT_ID_LIMIT
+import dev.cursorremote.android.di.NotificationTargetMailbox
+import dev.cursorremote.android.notify.NotificationTarget
 import dev.cursorremote.android.state.CursorRemoteViewModel
 import dev.cursorremote.android.ui.AppDestination
 import java.math.BigDecimal
@@ -21,6 +30,7 @@ import java.security.PublicKey
 import java.security.Signature
 import java.security.spec.ECGenParameterSpec
 import java.util.concurrent.atomic.AtomicLong
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -1163,14 +1173,434 @@ class FoundationTest {
         }
     }
 
+    @Test
+    fun localRestoreSanitizesSelectionAndPersistsLatestWithoutClobberingCatchUp() {
+        val store = VolatileReliabilityStore()
+        runBlocking {
+            store.setNeedsCatchUp(true)
+            store.saveSelection(NavigationSelection("missing", "ws-1", "sess-1"))
+        }
+        withViewModel(reliabilityStore = store) { viewModel, _, _ ->
+            runBlocking {
+                assertNull(viewModel.uiState.value.selectedMachineId)
+                assertNull(viewModel.uiState.value.selectedWorkspaceId)
+                assertNull(viewModel.uiState.value.selectedSessionId)
+                assertEquals(0L, viewModel.navigationRestore.value.revision)
+                assertEquals(NavigationSelection(null, null, null), store.loadSelection())
+                assertTrue(store.needsCatchUp())
+                viewModel.selectMachine("pc-1")
+                viewModel.selectWorkspace("ws-1")
+                viewModel.selectSession("sess-1")
+                assertEquals(NavigationSelection("pc-1", "ws-1", "sess-1"), store.loadSelection())
+                assertTrue(store.needsCatchUp())
+                viewModel.selectMachine("pc-2")
+                assertEquals(NavigationSelection("pc-2", null, null), store.loadSelection())
+            }
+        }
+        val blankStore = VolatileReliabilityStore()
+        runBlocking { blankStore.saveSelection(NavigationSelection("pc-1", "", "sess-1")) }
+        withViewModel(
+            reliabilityStore = blankStore,
+            prepare = { dao, _ -> dao.upsert(pairedMachine()) },
+        ) { viewModel, _, _ ->
+            assertEquals("pc-1", viewModel.uiState.value.selectedMachineId)
+            assertNull(viewModel.uiState.value.selectedWorkspaceId)
+            assertNull(viewModel.uiState.value.selectedSessionId)
+            assertEquals(AppDestination.Workspaces, viewModel.navigationRestore.value.destination)
+            assertTrue(viewModel.uiState.value.chatMessages.isEmpty())
+        }
+        val throwing =
+            object : ReliabilityStore by VolatileReliabilityStore() {
+                override suspend fun saveSelection(selection: NavigationSelection) = error("save")
+            }
+        withViewModel(reliabilityStore = throwing) { viewModel, _, _ ->
+            viewModel.selectMachine("pc-1")
+            assertEquals("pc-1", viewModel.uiState.value.selectedMachineId)
+        }
+        val loaded = CompletableDeferred<Unit>()
+        val proceed = CompletableDeferred<Unit>()
+        val inner = VolatileReliabilityStore()
+        runBlocking { inner.saveSelection(NavigationSelection("pc-old", "ws-old", "sess-old")) }
+        val gated =
+            object : ReliabilityStore by inner {
+                override suspend fun loadSelection(): NavigationSelection {
+                    loaded.complete(Unit)
+                    proceed.await()
+                    return inner.loadSelection()
+                }
+            }
+        withViewModel(
+            reliabilityStore = gated,
+            prepare = { dao, _ ->
+                dao.upsert(pairedMachine())
+                dao.upsert(MachineEntity("pc-old", "Old", "ws://127.0.0.1:8787", "device-old", 1L))
+            },
+        ) { viewModel, _, _ ->
+            runBlocking {
+                withTimeout(1_000) { loaded.await() }
+                viewModel.selectMachine("pc-1")
+                viewModel.selectWorkspace("ws-1")
+                viewModel.selectSession("sess-1")
+                proceed.complete(Unit)
+                assertEquals("pc-1", viewModel.uiState.value.selectedMachineId)
+                assertEquals("ws-1", viewModel.uiState.value.selectedWorkspaceId)
+                assertEquals("sess-1", viewModel.uiState.value.selectedSessionId)
+                assertEquals(NavigationSelection("pc-1", "ws-1", "sess-1"), inner.loadSelection())
+                assertEquals(0L, viewModel.navigationRestore.value.revision)
+            }
+        }
+    }
+
+    @Test
+    fun coldRestoreFallsBackAndLoadsValidSessionOnceWithEmptyChat() {
+        val missingWs = VolatileReliabilityStore()
+        runBlocking { missingWs.saveSelection(NavigationSelection("pc-1", "ws-gone", "sess-1")) }
+        withViewModel(
+            reliabilityStore = missingWs,
+            appForeground = MutableStateFlow(true),
+            prepare = { dao, _ -> dao.upsert(pairedMachine()) },
+        ) { viewModel, _, transport ->
+            val state = viewModel.uiState.value
+            assertEquals("pc-1", state.selectedMachineId)
+            assertNull(state.selectedWorkspaceId)
+            assertNull(state.selectedSessionId)
+            assertEquals(AppDestination.Workspaces, viewModel.navigationRestore.value.destination)
+            assertTrue(state.chatMessages.isEmpty())
+            assertEquals(0, transport.sent.count { commandType(it) == "session.load" })
+            assertEquals(RemoteConnectionState.Ready, state.remoteConnection)
+        }
+        val missingSess = VolatileReliabilityStore()
+        runBlocking { missingSess.saveSelection(NavigationSelection("pc-1", "ws-1", "sess-gone")) }
+        withViewModel(
+            reliabilityStore = missingSess,
+            appForeground = MutableStateFlow(true),
+            prepare = { dao, _ -> dao.upsert(pairedMachine()) },
+        ) { viewModel, _, transport ->
+            val state = viewModel.uiState.value
+            assertEquals("pc-1", state.selectedMachineId)
+            assertEquals("ws-1", state.selectedWorkspaceId)
+            assertNull(state.selectedSessionId)
+            assertEquals(AppDestination.Sessions, viewModel.navigationRestore.value.destination)
+            assertEquals(0, transport.sent.count { commandType(it) == "session.load" })
+        }
+        val valid = VolatileReliabilityStore()
+        runBlocking { valid.saveSelection(NavigationSelection("pc-1", "ws-1", "sess-1")) }
+        withViewModel(
+            reliabilityStore = valid,
+            appForeground = MutableStateFlow(true),
+            prepare = { dao, _ -> dao.upsert(pairedMachine()) },
+        ) { viewModel, _, transport ->
+            val state = viewModel.uiState.value
+            assertEquals("pc-1", state.selectedMachineId)
+            assertEquals("ws-1", state.selectedWorkspaceId)
+            assertEquals("sess-1", state.selectedSessionId)
+            assertEquals(AppDestination.Chat, viewModel.navigationRestore.value.destination)
+            assertTrue(state.chatMessages.isEmpty())
+            assertEquals(1, transport.sent.count { commandType(it) == "session.load" })
+            assertEquals(0, transport.sent.count { commandType(it) == "session.send" })
+        }
+    }
+
+    @Test
+    fun notificationMailboxDedupsConsumeAndEvictsOldest() {
+        val mailbox = NotificationTargetMailbox(maxDispatchedEventIds = 2)
+        val first = NotificationTarget("pc-1", "sess-1", "evt-1")
+        val second = NotificationTarget("pc-1", "sess-1", "evt-2")
+        val third = NotificationTarget("pc-1", "sess-1", "evt-3")
+        mailbox.publish(first)
+        mailbox.publish(first)
+        assertEquals(first, mailbox.target.value)
+        mailbox.consume("evt-2")
+        assertEquals(first, mailbox.target.value)
+        mailbox.consume("evt-1")
+        assertNull(mailbox.target.value)
+        mailbox.publish(second)
+        mailbox.publish(first)
+        assertEquals(second, mailbox.target.value)
+        mailbox.consume("evt-1")
+        assertEquals(second, mailbox.target.value)
+        mailbox.publish(third)
+        mailbox.publish(first)
+        assertEquals(first, mailbox.target.value)
+        mailbox.consume("evt-2")
+        assertEquals(first, mailbox.target.value)
+        assertEquals(4096, NOTIFICATION_TARGET_EVENT_ID_LIMIT)
+    }
+
+    @Test
+    fun deepLinkLoadsValidSessionOnceAndOpensEmptyChat() {
+        val targets = MutableStateFlow<NotificationTarget?>(null)
+        val consumed = mutableListOf<String>()
+        withViewModel(
+            notificationTargets = targets,
+            consumeNotificationTarget = { consumed += it },
+            prepare = { dao, _ -> dao.upsert(pairedMachine()) },
+        ) { viewModel, _, transport ->
+            targets.value = NotificationTarget("pc-1", "sess-1", "evt-valid")
+            val state = viewModel.uiState.value
+            assertEquals("pc-1", state.selectedMachineId)
+            assertEquals("ws-1", state.selectedWorkspaceId)
+            assertEquals("sess-1", state.selectedSessionId)
+            assertEquals(AppDestination.Chat, viewModel.navigationRestore.value.destination)
+            assertTrue(state.chatMessages.isEmpty())
+            assertEquals(1, transport.sent.count { commandType(it) == "session.load" })
+            assertNoPromptOrPermissionFrames(transport)
+            assertEquals(listOf("evt-valid"), consumed)
+        }
+    }
+
+    @Test
+    fun deepLinkAlreadySelectedPreservesChatAndSkipsLoad() {
+        val targets = MutableStateFlow<NotificationTarget?>(null)
+        withViewModel(
+            notificationTargets = targets,
+            prepare = { dao, _ -> dao.upsert(pairedMachine()) },
+        ) { viewModel, _, transport ->
+            runBlocking {
+                assertTrue(viewModel.connectExistingMachine("pc-1"))
+                assertTrue(viewModel.openWorkspace("ws-1"))
+                assertTrue(viewModel.resumeSession("sess-1"))
+                hangSessionSend(transport)
+                viewModel.sendPrompt("keep-chat")
+                assertEquals(listOf("keep-chat"), viewModel.uiState.value.chatMessages.map { it.text })
+                val loadsBefore = transport.sent.count { commandType(it) == "session.load" }
+                val sendsBefore = transport.sent.count { commandType(it) == "session.send" }
+                val approvalsBefore = transport.sent.count { commandType(it) == "permission.approve" }
+                val rejectsBefore = transport.sent.count { commandType(it) == "permission.reject" }
+                targets.value = NotificationTarget("pc-1", "sess-1", "evt-same")
+                val after = viewModel.uiState.value
+                assertEquals("pc-1", after.selectedMachineId)
+                assertEquals("ws-1", after.selectedWorkspaceId)
+                assertEquals("sess-1", after.selectedSessionId)
+                assertEquals(listOf("keep-chat"), after.chatMessages.map { it.text })
+                assertEquals(AppDestination.Chat, viewModel.navigationRestore.value.destination)
+                assertEquals(loadsBefore, transport.sent.count { commandType(it) == "session.load" })
+                assertEquals(sendsBefore, transport.sent.count { commandType(it) == "session.send" })
+                assertEquals(approvalsBefore, transport.sent.count { commandType(it) == "permission.approve" })
+                assertEquals(rejectsBefore, transport.sent.count { commandType(it) == "permission.reject" })
+            }
+        }
+    }
+
+    @Test
+    fun deepLinkMissingSessionSkipsLoadAndFallsBackToWorkspaces() {
+        val targets = MutableStateFlow<NotificationTarget?>(null)
+        withViewModel(
+            notificationTargets = targets,
+            prepare = { dao, _ -> dao.upsert(pairedMachine()) },
+        ) { viewModel, _, transport ->
+            targets.value = NotificationTarget("pc-1", "sess-gone", "evt-missing")
+            val state = viewModel.uiState.value
+            assertEquals("pc-1", state.selectedMachineId)
+            assertNull(state.selectedWorkspaceId)
+            assertNull(state.selectedSessionId)
+            assertEquals("ws-1", state.workspaces.single().workspaceId)
+            assertTrue(state.sessions.isEmpty())
+            assertEquals(AppDestination.Workspaces, viewModel.navigationRestore.value.destination)
+            assertEquals(0, transport.sent.count { commandType(it) == "session.load" })
+            assertNoPromptOrPermissionFrames(transport)
+        }
+    }
+
+    @Test
+    fun deepLinkStaleMachineSkipsNetworkAndFallsBackToMachines() {
+        val targets = MutableStateFlow<NotificationTarget?>(null)
+        withViewModel(notificationTargets = targets) { viewModel, _, transport ->
+            targets.value = NotificationTarget("missing-pc", "sess-1", "evt-stale")
+            val state = viewModel.uiState.value
+            assertNull(state.selectedMachineId)
+            assertEquals(AppDestination.Machines, viewModel.navigationRestore.value.destination)
+            assertTrue(transport.sent.isEmpty())
+            assertEquals(RemoteConnectionState.Disconnected, state.remoteConnection)
+            assertNoPromptOrPermissionFrames(transport)
+        }
+    }
+
+    @Test
+    fun deepLinkDoesNotOverrideUserSelectDuringSearch() {
+        val targets = MutableStateFlow<NotificationTarget?>(null)
+        withViewModel(
+            autoRespond = false,
+            notificationTargets = targets,
+            prepare = { dao, _ -> dao.upsert(pairedMachine()) },
+        ) { viewModel, _, transport ->
+            runBlocking {
+                val listed = CompletableDeferred<String>()
+                transport.onSend = { text ->
+                    if (commandType(text) == "workspace.list") {
+                        listed.complete(text)
+                    } else {
+                        transport.emit(successBody(requestIdOf(text), text))
+                    }
+                }
+                targets.value = NotificationTarget("pc-1", "sess-1", "evt-stale-user")
+                val hung = withTimeout(1_000) { listed.await() }
+                viewModel.selectMachine("pc-2")
+                viewModel.selectWorkspace("ws-keep")
+                transport.emit(successBody(requestIdOf(hung), hung))
+                val after = viewModel.uiState.value
+                assertEquals("pc-2", after.selectedMachineId)
+                assertEquals("ws-keep", after.selectedWorkspaceId)
+                assertNull(after.selectedSessionId)
+                assertEquals(RemoteConnectionState.Disconnected, after.remoteConnection)
+                assertEquals(0L, viewModel.navigationRestore.value.revision)
+                assertEquals(0, transport.sent.count { commandType(it) == "session.load" })
+                assertNoPromptOrPermissionFrames(transport)
+            }
+        }
+    }
+
+    @Test
+    fun deepLinkMismatchedLoadIdFallsBackToWorkspaces() {
+        val targets = MutableStateFlow<NotificationTarget?>(null)
+        withViewModel(
+            autoRespond = false,
+            notificationTargets = targets,
+            prepare = { dao, _ -> dao.upsert(pairedMachine()) },
+        ) { viewModel, _, transport ->
+            transport.onSend = { text ->
+                if (commandType(text) == "session.load") {
+                    transport.emit(
+                        resultJson(
+                            requestIdOf(text),
+                            ok = true,
+                            value =
+                                """{"remoteSessionId":"sess-other","cursorSessionId":null,"workspaceId":"ws-1","title":"Session","status":"idle","createdAt":"c","updatedAt":"u"}""",
+                        ),
+                    )
+                } else {
+                    transport.emit(successBody(requestIdOf(text), text))
+                }
+            }
+            targets.value = NotificationTarget("pc-1", "sess-1", "evt-mismatch")
+            val state = viewModel.uiState.value
+            assertEquals("pc-1", state.selectedMachineId)
+            assertNull(state.selectedWorkspaceId)
+            assertNull(state.selectedSessionId)
+            assertEquals("ws-1", state.workspaces.single().workspaceId)
+            assertEquals(AppDestination.Workspaces, viewModel.navigationRestore.value.destination)
+            assertEquals(1, transport.sent.count { commandType(it) == "session.load" })
+            assertNoPromptOrPermissionFrames(transport)
+        }
+    }
+
+    @Test
+    fun durableNeedsCatchUpForcesResyncClearsOnSuccessPreservesOnFailure() {
+        val successStore = VolatileReliabilityStore()
+        runBlocking { successStore.setNeedsCatchUp(true) }
+        withViewModel(autoRespond = false, reliabilityStore = successStore) { viewModel, dao, transport ->
+            runBlocking {
+                dao.upsert(pairedMachine())
+                transport.onSend = { text -> transport.emit(successBody(requestIdOf(text), text)) }
+                assertTrue(viewModel.connectExistingMachine("pc-1"))
+                assertTrue(viewModel.openWorkspace("ws-1"))
+                assertTrue(viewModel.resumeSession("sess-1"))
+                transport.fail()
+                val listsBefore = transport.sent.count { commandType(it) == "workspace.list" }
+                val loadsBefore = transport.sent.count { commandType(it) == "session.load" }
+                assertTrue(viewModel.reconnectSelectedMachine())
+                assertFalse(successStore.needsCatchUp())
+                assertTrue(transport.sent.count { commandType(it) == "workspace.list" } > listsBefore)
+                assertEquals(loadsBefore, transport.sent.count { commandType(it) == "session.load" })
+            }
+        }
+        val failStore = VolatileReliabilityStore()
+        runBlocking { failStore.setNeedsCatchUp(true) }
+        withViewModel(autoRespond = false, reliabilityStore = failStore) { viewModel, dao, transport ->
+            runBlocking {
+                dao.upsert(pairedMachine())
+                transport.onSend = { text -> transport.emit(successBody(requestIdOf(text), text)) }
+                assertTrue(viewModel.connectExistingMachine("pc-1"))
+                assertTrue(viewModel.openWorkspace("ws-1"))
+                transport.fail()
+                transport.onSend = { text ->
+                    if (commandType(text) == "workspace.list") {
+                        transport.emit(resultJson(requestIdOf(text), ok = false, value = "null", error = "workspace list failed"))
+                    } else {
+                        transport.emit(successBody(requestIdOf(text), text))
+                    }
+                }
+                assertFalse(viewModel.reconnectSelectedMachine())
+                assertTrue(failStore.needsCatchUp())
+            }
+        }
+        val throwing =
+            object : ReliabilityStore by VolatileReliabilityStore() {
+                override suspend fun needsCatchUp(): Boolean = error("db")
+            }
+        withViewModel(reliabilityStore = throwing) { viewModel, dao, transport ->
+            runBlocking {
+                dao.upsert(pairedMachine())
+                assertTrue(viewModel.connectExistingMachine("pc-1"))
+                transport.fail()
+                val listsBefore = transport.sent.count { commandType(it) == "workspace.list" }
+                assertTrue(viewModel.reconnectSelectedMachine())
+                assertEquals(RemoteConnectionState.Ready, viewModel.uiState.value.remoteConnection)
+                assertTrue(viewModel.uiState.value.syncGapWarning)
+                assertTrue(transport.sent.count { commandType(it) == "workspace.list" } > listsBefore)
+            }
+        }
+    }
+
+    @Test
+    fun onClearedDoesNotDisconnectRepository() {
+        val job = SupervisorJob()
+        val scope = CoroutineScope(job + Dispatchers.Unconfined)
+        val dao = FakeMachineDao()
+        val transport = FakeTransport(true)
+        val repository =
+            RemoteRepository(
+                transport = transport,
+                credentialStore = JavaEcdsaCredentialStore(),
+                scope = scope,
+                requestTimeoutMs = 1_000,
+            )
+        val store = ViewModelStore()
+        val provider =
+            ViewModelProvider(
+                store,
+                object : ViewModelProvider.Factory {
+                    @Suppress("UNCHECKED_CAST")
+                    override fun <T : ViewModel> create(modelClass: Class<T>): T =
+                        CursorRemoteViewModel(
+                            machineDao = dao,
+                            hiddenModelDao = FakeHiddenModelDao(),
+                            remoteRepository = repository,
+                            coroutineScope = scope,
+                            nowMillis = { 1_699_000_000_000L },
+                        ) as T
+                },
+            )
+        try {
+            val viewModel = provider[CursorRemoteViewModel::class.java]
+            runBlocking {
+                dao.upsert(pairedMachine())
+                assertTrue(viewModel.connectExistingMachine("pc-1"))
+            }
+            assertEquals(RemoteConnectionState.Ready, repository.connectionState.value)
+            store.clear()
+            assertEquals(RemoteConnectionState.Ready, repository.connectionState.value)
+            assertEquals(ConnectionState.Connected, transport.connectionState.value)
+        } finally {
+            repository.disconnect()
+            job.cancel()
+        }
+    }
+
     private fun withViewModel(
         autoRespond: Boolean = true,
         hiddenModelDao: HiddenModelDao = FakeHiddenModelDao(),
+        reliabilityStore: ReliabilityStore = VolatileReliabilityStore(),
+        appForeground: MutableStateFlow<Boolean> = MutableStateFlow(false),
+        notificationTargets: StateFlow<NotificationTarget?> = MutableStateFlow(null),
+        consumeNotificationTarget: (String) -> Unit = {},
+        prepare: suspend (FakeMachineDao, ReliabilityStore) -> Unit = { _, _ -> },
         block: (CursorRemoteViewModel, FakeMachineDao, FakeTransport) -> Unit,
     ) {
         val job = SupervisorJob()
         val scope = CoroutineScope(job + Dispatchers.Unconfined)
         val dao = FakeMachineDao()
+        runBlocking { prepare(dao, reliabilityStore) }
         val transport = FakeTransport(autoRespond)
         val repository =
             RemoteRepository(
@@ -1186,6 +1616,10 @@ class FoundationTest {
                 remoteRepository = repository,
                 coroutineScope = scope,
                 nowMillis = { 1_699_000_000_000L },
+                reliabilityStore = reliabilityStore,
+                appForeground = appForeground,
+                notificationTargets = notificationTargets,
+                consumeNotificationTarget = consumeNotificationTarget,
             )
         try {
             block(viewModel, dao, transport)
@@ -1350,6 +1784,7 @@ internal fun successBody(
     val value =
         when (Json.parseToJsonElement(text).jsonObject.getValue("kind").jsonPrimitive.content) {
             "pair", "auth_proof" -> """{"deviceId":"device-1"}"""
+            "transport_register" -> """{"registered":true}"""
             "command" ->
                 when (commandType(text)) {
                     "workspace.list" ->
@@ -1464,4 +1899,10 @@ internal fun hangSessionSend(
             transport.emit(successBody(requestIdOf(text), text))
         }
     }
+}
+
+internal fun assertNoPromptOrPermissionFrames(transport: FakeTransport) {
+    assertEquals(0, transport.sent.count { commandType(it) == "session.send" })
+    assertEquals(0, transport.sent.count { commandType(it) == "permission.approve" })
+    assertEquals(0, transport.sent.count { commandType(it) == "permission.reject" })
 }

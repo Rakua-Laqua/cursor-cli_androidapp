@@ -9,6 +9,9 @@ import dev.cursorremote.android.lastCommand
 import dev.cursorremote.android.requestIdOf
 import dev.cursorremote.android.resultJson
 import dev.cursorremote.android.successBody
+import dev.cursorremote.android.data.local.NavigationSelection
+import dev.cursorremote.android.data.local.ReliabilityStore
+import dev.cursorremote.android.data.local.VolatileReliabilityStore
 import dev.cursorremote.android.data.protocol.PairingQrPayload
 import dev.cursorremote.android.data.protocol.RemoteEvent
 import dev.cursorremote.android.data.protocol.RemoteProtocol
@@ -23,6 +26,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
@@ -411,6 +415,103 @@ class RemoteRepositoryTest {
             assertEquals(ConnectionState.Disconnected, transport.connectionState.value)
         }
 
+    @Test
+    fun transportRegisterSendsOnlyWhenReadyAndCorrelatesResult() {
+        withRepository { repo, transport ->
+            try {
+                repo.updateTransportRegistration("d1.tok-APA91b:x", true)
+                fail("expected not authenticated")
+            } catch (error: RemoteRepositoryException) {
+                assertEquals("Not authenticated", error.message)
+            }
+            assertEquals(0, transport.sent.count { frameKind(it) == "transport_register" })
+            repo.authenticate("ws://127.0.0.1:8787", "pc-1", "device-1")
+            repo.updateTransportRegistration("d1.tok-APA91b:x", false)
+            val frame = transport.sent.last { frameKind(it) == "transport_register" }
+            assertEquals("transport_register", frameKind(frame))
+            assertEquals(null, commandType(frame))
+            assertTrue(frame.contains("\"fcmToken\":\"d1.tok-APA91b:x\""))
+            assertTrue(frame.contains("\"appForeground\":false"))
+            repo.updateTransportRegistration(null, true)
+            assertTrue(transport.sent.last { frameKind(it) == "transport_register" }.contains("\"fcmToken\":null"))
+            repo.disconnect()
+            try {
+                repo.updateTransportRegistration("d1.tok-APA91b:x", true)
+                fail("expected not authenticated")
+            } catch (error: RemoteRepositoryException) {
+                assertEquals("Not authenticated", error.message)
+            }
+        }
+    }
+
+    @Test
+    fun sharedReliabilityStoreHydratesCursorAndIgnoresDuplicates() {
+        val store = VolatileReliabilityStore()
+        withRepository(autoRespond = false, reliabilityStore = store) { repo, transport ->
+            val received = mutableListOf<RemoteEvent>()
+            val collectJob = launch(Dispatchers.Unconfined) { repo.events.collect { received += it } }
+            transport.onSend = { text ->
+                if (commandType(text) == "sync.catch_up") {
+                    transport.emit(
+                        resultJson(
+                            requestIdOf(text),
+                            ok = true,
+                            value =
+                                """{"status":"replayed","events":[],"headEventId":"evt-head","pendingPermission":null}""",
+                        ),
+                    )
+                } else {
+                    transport.emit(successBody(requestIdOf(text), text))
+                }
+            }
+            repo.authenticate("ws://127.0.0.1:8787", "pc-1", "device-1")
+            assertTrue(lastCommand(transport, "sync.catch_up").contains("\"lastEventId\":null"))
+            assertEquals("evt-head", store.loadCursor("pc-1"))
+            transport.emit(eventJson("assistant.message", "sess-1", """{"text":"live","delta":true}""", eventId = "evt-live"))
+            transport.emit(eventJson("assistant.message", "sess-1", """{"text":"dup","delta":true}""", eventId = "evt-live"))
+            assertEquals(listOf("evt-live"), received.map { it.eventId })
+            assertEquals("evt-live", store.loadCursor("pc-1"))
+            collectJob.cancel()
+        }
+        withRepository(autoRespond = false, reliabilityStore = store) { repo, transport ->
+            transport.onSend = { text ->
+                if (commandType(text) == "sync.catch_up") {
+                    transport.emit(
+                        resultJson(
+                            requestIdOf(text),
+                            ok = true,
+                            value =
+                                """{"status":"replayed","events":[],"headEventId":"evt-live","pendingPermission":null}""",
+                        ),
+                    )
+                } else {
+                    transport.emit(successBody(requestIdOf(text), text))
+                }
+            }
+            repo.authenticate("ws://127.0.0.1:8787", "pc-1", "device-1")
+            assertTrue(lastCommand(transport, "sync.catch_up").contains("\"lastEventId\":\"evt-live\""))
+            assertEquals("evt-live", store.loadCursor("pc-1"))
+        }
+    }
+
+    @Test
+    fun storageExceptionsDoNotKillEventProcessing() {
+        val store = FaultyReliabilityStore()
+        store.failReads = true
+        store.failWrites = true
+        withRepository(reliabilityStore = store) { repo, transport ->
+            val received = mutableListOf<RemoteEvent>()
+            val collectJob = launch(Dispatchers.Unconfined) { repo.events.collect { received += it } }
+            repo.authenticate("ws://127.0.0.1:8787", "pc-1", "device-1")
+            assertEquals(RemoteConnectionState.Ready, repo.connectionState.value)
+            transport.emit(eventJson("assistant.message", "sess-1", """{"text":"one","delta":true}""", eventId = "evt-1"))
+            transport.emit(eventJson("assistant.message", "sess-1", """{"text":"two","delta":true}""", eventId = "evt-2"))
+            assertEquals(listOf("evt-1", "evt-2"), received.map { it.eventId })
+            assertEquals(RemoteConnectionState.Ready, repo.connectionState.value)
+            collectJob.cancel()
+        }
+    }
+
     private suspend fun assertAuthFailure(
         repo: RemoteRepository,
         transport: FakeTransport,
@@ -437,6 +538,7 @@ class RemoteRepositoryTest {
         autoRespond: Boolean = true,
         autoChallenge: Boolean = true,
         liveQueueLimit: Int = 2048,
+        reliabilityStore: ReliabilityStore = VolatileReliabilityStore(),
         block: suspend CoroutineScope.(RemoteRepository, FakeTransport) -> Unit,
     ) {
         val job = SupervisorJob()
@@ -449,6 +551,7 @@ class RemoteRepositoryTest {
                 scope = scope,
                 requestTimeoutMs = timeoutMs,
                 liveQueueLimit = liveQueueLimit,
+                reliabilityStore = reliabilityStore,
             )
         try {
             runBlocking { block(repo, transport) }
@@ -467,4 +570,34 @@ class RemoteRepositoryTest {
             expiresAt = 1_700_000_000_000L,
         )
     }
+}
+
+private fun frameKind(text: String): String? =
+    Json.parseToJsonElement(text).jsonObject["kind"]?.jsonPrimitive?.content
+
+private class FaultyReliabilityStore(
+    private val inner: ReliabilityStore = VolatileReliabilityStore(),
+) : ReliabilityStore {
+    var failReads = false
+    var failWrites = false
+
+    override suspend fun loadSelection(): NavigationSelection = inner.loadSelection()
+
+    override suspend fun saveSelection(selection: NavigationSelection) = inner.saveSelection(selection)
+
+    override suspend fun loadCursor(machineId: String): String? {
+        if (failReads) error("read")
+        return inner.loadCursor(machineId)
+    }
+
+    override suspend fun saveCursor(machineId: String, lastEventId: String?) {
+        if (failWrites) error("write")
+        inner.saveCursor(machineId, lastEventId)
+    }
+
+    override suspend fun needsCatchUp(): Boolean = inner.needsCatchUp()
+
+    override suspend fun setNeedsCatchUp(value: Boolean) = inner.setNeedsCatchUp(value)
+
+    override suspend fun claimNotificationEventId(eventId: String): Boolean = inner.claimNotificationEventId(eventId)
 }

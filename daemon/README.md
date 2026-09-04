@@ -6,7 +6,17 @@ Phase 1 の TASK-104 では、Workspace と Session の metadata を `stateDir/m
 
 `allowedRoots` は Daemon 起動時に実在するディレクトリとして canonicalize し、その値を結界として固定します。判定時に許可ルート自身を再 realpath しません。`session.create` / `session.load` / `session.send`、および `workspace.list` や Git metadata の更新は、登録済み path を realpath して固定済み `allowedRoots` に再照合したうえで行います。復元時に許可ルート外へ出る Workspace / Session はメモリへ載せません。`session.create` の `workspaceId` は登録済み Workspace の ID です。
 
-`workspace.list` / `workspace.register` は Git branch・未コミット変更・稼働中 Session 数・最終利用日時を返します。会話本文は Cursor 側 Session を正本とし、ファイルには含めません。
+会話本文は Cursor 側 Session を正本とし、ファイルには含めません。
+
+## Restart / ACP recovery（v1.20.0）
+
+`stateDir` 付き再起動では Workspace / Session / Cursor session mapping / device auth を metadata から復元します。EventLog は永続化しないため、再起動後の catch-up は `gap` です。会話本文の独自保存はしません。
+
+ACP 異常終了後は bounded process recovery と generation 隔離を行い、`initialize` 後に load 可能な Session を再 load します。in-flight command は一度だけ失敗し、prompt / permission は自動再実行しません。shutdown 競合は安全に終了します。
+
+## Security（v1.20.0）
+
+Workspace canonical 境界、symlink 差替え、sensitive basename（env / private key / credentials / secrets 等）、device auth / replay、permission fail-closed を強化します。ACP stderr 本文は記録せず、抑止通知だけにします。FCM 送信と token registry は Relay 側です（`relay/README.md`）。
 
 ## Local E2E
 
@@ -39,4 +49,4 @@ npm run remote-dev -- --state-dir ./runtime-data --allowed-root <workspace> sess
 
 `--acp-command` を省略すると実 Cursor CLI の ACP を解決します。Cursor Desktop は不要です。
 
-v1.3.0 から `attachDaemonToRelay` で localhost Relay へ outbound 接続できます。v1.4.0 は Device Pairing の `PairingManager` を含みます。`remote-dev` 自体は in-process の信頼経路のまま Relay を通りません。QR 表示 CLI と Android 実データフローはまだありません。進捗は `docs/implementation_status.md` を見てください。
+v1.3.0 から `attachDaemonToRelay` で localhost Relay へ outbound 接続できます。v1.4.0 は Device Pairing の `PairingManager` を含みます。`remote-dev` 自体は in-process の信頼経路のまま Relay を通りません。QR 表示 CLI はまだありません。進捗は `docs/implementation_status.md` を見てください。

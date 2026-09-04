@@ -245,6 +245,10 @@ object RemoteProtocol {
     val DIFF_SOURCES = setOf("git", "none")
     val DIFF_CHANGES = setOf("modified", "added", "deleted", "renamed", "untracked")
     private val CURRENCY_CODE = Regex("^[A-Z]{3}$")
+    private const val TRANSPORT_REGISTER_MAX_BYTES = 8192
+    private const val TRANSPORT_REGISTER_REQUEST_ID_MAX = 128
+    private const val FCM_TOKEN_MAX_CODE_UNITS = 4096
+    private val FCM_TOKEN_CHARS = Regex("^[A-Za-z0-9_.:-]+$")
     val CHAT_EVENT_TYPES =
         setOf(
             "session.status_changed",
@@ -432,6 +436,40 @@ object RemoteProtocol {
             put("deviceId", deviceId)
             put("signature", encodeBase64Url(signature))
         }.toString()
+    }
+
+    fun encodeTransportRegisterFrame(
+        requestId: String,
+        fcmToken: String?,
+        appForeground: Boolean,
+    ): String {
+        requireNonEmpty(requestId, "requestId")
+        if (requestId.length > TRANSPORT_REGISTER_REQUEST_ID_MAX) {
+            throw ProtocolParseError("requestId must be at most 128 characters.")
+        }
+        val json =
+            buildJsonObject {
+                put("kind", "transport_register")
+                put("requestId", requestId)
+                if (fcmToken == null) put("fcmToken", JsonNull) else put("fcmToken", parseFcmToken(fcmToken))
+                put("appForeground", appForeground)
+            }.toString()
+        if (json.toByteArray(StandardCharsets.UTF_8).size > TRANSPORT_REGISTER_MAX_BYTES) {
+            throw ProtocolParseError("transport_register exceeds 8192 bytes.")
+        }
+        return json
+    }
+
+    fun parseTransportRegistrationResult(value: JsonElement?) {
+        val root =
+            parseObject(
+                value ?: throw ProtocolParseError("transport registration must be a JSON object."),
+                "transport registration",
+            )
+        assertExactKeys(root, listOf("registered"))
+        if (!requireBoolean(root, "registered")) {
+            throw ProtocolParseError("registered must be true.")
+        }
     }
 
     fun encodeCommandFrame(
@@ -862,6 +900,19 @@ object RemoteProtocol {
             command = requireStringField(root, "command"),
             risk = "high",
         )
+    }
+
+    private fun parseFcmToken(value: String): String {
+        if (value.isEmpty()) {
+            throw ProtocolParseError("fcmToken must be a non-empty string or null.")
+        }
+        if (value.length > FCM_TOKEN_MAX_CODE_UNITS) {
+            throw ProtocolParseError("fcmToken must be at most 4096 characters.")
+        }
+        if (!FCM_TOKEN_CHARS.matches(value)) {
+            throw ProtocolParseError("fcmToken contains invalid characters.")
+        }
+        return value
     }
 
     private fun permissionDecisionPayload(permissionId: String): JsonObject {

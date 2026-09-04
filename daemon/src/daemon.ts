@@ -180,7 +180,7 @@ export class Daemon {
 
   async stop(): Promise<void> {
     this.stopEventLog();
-    await this.acpProcess.shutdown();
+    await this.sessionAdapter.shutdown();
   }
 
   private catchUp(command: RemoteCommand): SyncCatchUpResult {

@@ -13,7 +13,7 @@ class CursorRemoteApplication : Application() {
         container = AppContainer(this)
         registerActivityLifecycleCallbacks(
             AppForegroundTracker { isForeground ->
-                container.pushNotificationCoordinator.setForeground(isForeground)
+                container.setForeground(isForeground)
             },
         )
     }

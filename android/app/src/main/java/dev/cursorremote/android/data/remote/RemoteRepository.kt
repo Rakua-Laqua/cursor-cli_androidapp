@@ -12,6 +12,8 @@ import dev.cursorremote.android.data.protocol.RemoteProtocol
 import dev.cursorremote.android.data.protocol.SessionInfo
 import dev.cursorremote.android.data.protocol.SyncCatchUpResult
 import dev.cursorremote.android.data.protocol.WorkspaceInfo
+import dev.cursorremote.android.data.local.ReliabilityStore
+import dev.cursorremote.android.data.local.VolatileReliabilityStore
 import dev.cursorremote.android.data.security.DeviceCredentialStore
 import dev.cursorremote.android.data.transport.ConnectionState
 import dev.cursorremote.android.data.transport.WebSocketTransport
@@ -64,6 +66,7 @@ class RemoteRepository(
     private val nowMillis: () -> Long = { System.currentTimeMillis() },
     private val nowTimestamp: () -> String = { Instant.ofEpochMilli(nowMillis()).toString() },
     private val newRequestId: () -> String = { UUID.randomUUID().toString() },
+    private val reliabilityStore: ReliabilityStore = VolatileReliabilityStore(),
 ) {
     private val authMutex = Mutex()
     private val eventLock = Any()
@@ -75,12 +78,14 @@ class RemoteRepository(
     private val lastEventIdByMachine = HashMap<String, String>()
     private val seenEventIdsByMachine = HashMap<String, LinkedHashSet<String>>()
     private val liveQueue = ArrayDeque<RemoteEvent>()
-    private val currentMachineId = AtomicReference<String?>(null)
+    private val currentMachineIdRef = AtomicReference<String?>(null)
     private var bufferingEvents = false
     private var catchUpOverflowed = false
     val connectionState: StateFlow<RemoteConnectionState> = _connectionState.asStateFlow()
     val socketConnectionState: StateFlow<ConnectionState> = transport.connectionState
     val events: SharedFlow<RemoteEvent> = _events.asSharedFlow()
+
+    fun currentMachineId(): String? = currentMachineIdRef.get()
 
     init {
         scope.launch(start = CoroutineStart.UNDISPATCHED) {
@@ -136,6 +141,28 @@ class RemoteRepository(
         sendCommand("session.cancel", RemoteProtocol.sessionCancelPayload(), sessionId, timeoutMs = requestTimeoutMs)
     }
 
+    suspend fun updateTransportRegistration(fcmToken: String?, appForeground: Boolean) {
+        if (_connectionState.value != RemoteConnectionState.Ready) {
+            throw RemoteRepositoryException("Not authenticated")
+        }
+        val requestId = newRequestId()
+        val frame =
+            try {
+                RemoteProtocol.encodeTransportRegisterFrame(requestId, fcmToken, appForeground)
+            } catch (error: ProtocolParseError) {
+                throw RemoteRepositoryException(error.message ?: "transport_register failed")
+            }
+        val deferred = CompletableDeferred<RemoteCommandResult>()
+        pending[requestId] = deferred
+        sendOrThrow(requestId, frame)
+        val value = awaitRegistered(requestId, deferred, failAuthentication = false)
+        try {
+            RemoteProtocol.parseTransportRegistrationResult(value)
+        } catch (error: ProtocolParseError) {
+            throw RemoteRepositoryException(error.message ?: "transport_register failed")
+        }
+    }
+
     suspend fun approvePermission(sessionId: String, permissionId: String) {
         sendCommand("permission.approve", RemoteProtocol.permissionApprovePayload(permissionId), sessionId)
     }
@@ -185,7 +212,7 @@ class RemoteRepository(
     ): RemoteAuthResult =
         authMutex.withLock {
             reset(RemoteConnectionState.Connecting, RemoteRepositoryException("Connection replaced"), disconnectSocket = false)
-            currentMachineId.set(machineId)
+            currentMachineIdRef.set(machineId)
             synchronized(eventLock) {
                 bufferingEvents = true
                 catchUpOverflowed = false
@@ -262,6 +289,7 @@ class RemoteRepository(
         }
 
     private suspend fun applyCatchUp(machineId: String, sessionId: String?): SyncCatchUpResult {
+        hydrateCursor(machineId)
         val requestedCursor = synchronized(eventLock) { lastEventIdByMachine[machineId] }
         val catchUp =
             try {
@@ -274,7 +302,7 @@ class RemoteRepository(
             }
         var appliedReplay = false
         while (true) {
-            val batch =
+            val snapshot =
                 synchronized(eventLock) {
                     if (catchUpOverflowed) {
                         throw RemoteRepositoryException(OVERFLOW_MESSAGE)
@@ -292,9 +320,10 @@ class RemoteRepository(
                         appliedReplay = true
                     }
                     drainQueueLocked(machineId, next)
-                    next
+                    Pair(next, lastEventIdByMachine[machineId])
                 }
-            for (event in batch) {
+            persistCursorSafely(machineId, snapshot.second)
+            for (event in snapshot.first) {
                 _events.emit(event)
             }
             val more =
@@ -427,7 +456,7 @@ class RemoteRepository(
             }
             is IncomingRemoteFrame.Result -> pending.remove(frame.result.requestId)?.complete(frame.result)
             is IncomingRemoteFrame.Event -> {
-                val machineId = currentMachineId.get() ?: return
+                val machineId = currentMachineIdRef.get() ?: return
                 val overflow: Boolean
                 val toEmit: RemoteEvent?
                 synchronized(eventLock) {
@@ -451,6 +480,7 @@ class RemoteRepository(
                     return
                 }
                 if (toEmit != null) {
+                    persistCursorSafely(machineId, toEmit.eventId)
                     _events.emit(toEmit)
                 }
             }
@@ -488,6 +518,31 @@ class RemoteRepository(
             lastEventIdByMachine.remove(machineId)
         } else {
             lastEventIdByMachine[machineId] = eventId
+        }
+    }
+
+    private suspend fun hydrateCursor(machineId: String) {
+        val persisted =
+            try {
+                reliabilityStore.loadCursor(machineId)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                null
+            } ?: return
+        synchronized(eventLock) {
+            if (!lastEventIdByMachine.containsKey(machineId)) {
+                lastEventIdByMachine[machineId] = persisted
+            }
+        }
+    }
+
+    private suspend fun persistCursorSafely(machineId: String, eventId: String?) {
+        try {
+            reliabilityStore.saveCursor(machineId, eventId)
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
         }
     }
 

@@ -6,6 +6,9 @@ import dev.cursorremote.android.data.local.HiddenModelDao
 import dev.cursorremote.android.data.local.HiddenModelEntity
 import dev.cursorremote.android.data.local.MachineDao
 import dev.cursorremote.android.data.local.MachineEntity
+import dev.cursorremote.android.data.local.NavigationSelection
+import dev.cursorremote.android.data.local.ReliabilityStore
+import dev.cursorremote.android.data.local.VolatileReliabilityStore
 import dev.cursorremote.android.data.protocol.ChatEvent
 import dev.cursorremote.android.data.protocol.DiffSnapshot
 import dev.cursorremote.android.data.protocol.FileContent
@@ -20,8 +23,11 @@ import dev.cursorremote.android.data.protocol.SessionInfo
 import dev.cursorremote.android.data.protocol.SessionUsage
 import dev.cursorremote.android.data.protocol.SyncCatchUpResult
 import dev.cursorremote.android.data.protocol.WorkspaceInfo
+import dev.cursorremote.android.data.remote.ReconnectController
 import dev.cursorremote.android.data.remote.RemoteConnectionState
 import dev.cursorremote.android.data.remote.RemoteRepository
+import dev.cursorremote.android.notify.NotificationTarget
+import dev.cursorremote.android.ui.AppDestination
 import dev.cursorremote.android.data.transport.ConnectionState
 import dev.cursorremote.android.voice.VoicePromptController
 import dev.cursorremote.android.voice.VoicePromptState
@@ -29,11 +35,17 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicLong
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.filterNotNull
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withTimeout
 
 enum class ChatRole {
     User,
@@ -105,6 +117,11 @@ data class CursorRemoteUiState(
         get() = modelCatalog.filter { it.available && it.id !in hiddenModelIds }
 }
 
+data class NavigationRestoreTarget(
+    val revision: Long = 0L,
+    val destination: AppDestination = AppDestination.Machines,
+)
+
 class CursorRemoteViewModel(
     private val machineDao: MachineDao,
     private val hiddenModelDao: HiddenModelDao,
@@ -112,6 +129,10 @@ class CursorRemoteViewModel(
     coroutineScope: CoroutineScope? = null,
     private val nowMillis: () -> Long = { System.currentTimeMillis() },
     private val voicePromptController: VoicePromptController? = null,
+    private val reliabilityStore: ReliabilityStore = VolatileReliabilityStore(),
+    appForeground: StateFlow<Boolean> = MutableStateFlow(false),
+    notificationTargets: StateFlow<NotificationTarget?> = MutableStateFlow(null),
+    consumeNotificationTarget: (String) -> Unit = {},
 ) : ViewModel() {
     private val scope = coroutineScope ?: viewModelScope
     private val _uiState = MutableStateFlow(CursorRemoteUiState())
@@ -122,8 +143,25 @@ class CursorRemoteViewModel(
     private val fileEpoch = AtomicLong(0)
     private val modelEpoch = AtomicLong(0)
     private val gapResyncRequired = AtomicBoolean(false)
+    private val persistVersion = AtomicLong(0)
+    private val restoreRevision = AtomicLong(0)
+    private val persistMutex = Mutex()
+    private val reconnectMutex = Mutex()
+    private val suppressChatRestore = AtomicBoolean(false)
+    private val selectedMachineForReconnect = MutableStateFlow<String?>(null)
+    private val _navigationRestore = MutableStateFlow(NavigationRestoreTarget())
+    private var coldRestorePending = false
     val uiState: StateFlow<CursorRemoteUiState> = _uiState.asStateFlow()
     val connectionState: StateFlow<ConnectionState> = remoteRepository.socketConnectionState
+    val navigationRestore: StateFlow<NavigationRestoreTarget> = _navigationRestore.asStateFlow()
+    private val reconnectController =
+        ReconnectController(
+            scope = scope,
+            appForeground = appForeground,
+            selectedMachineId = selectedMachineForReconnect,
+            connectionState = remoteRepository.connectionState,
+            attempt = { reconnectSelectedMachine() },
+        )
 
     init {
         scope.launch {
@@ -157,6 +195,18 @@ class CursorRemoteViewModel(
                 }
             }
         }
+        scope.launch { restoreNavigationSelection() }
+        scope.launch {
+            notificationTargets.filterNotNull().collectLatest { target ->
+                try {
+                    resolveNotificationTarget(target)
+                } catch (error: CancellationException) {
+                    throw error
+                } finally {
+                    consumeNotificationTarget(target.eventId)
+                }
+            }
+        }
     }
 
     fun startVoicePrompt() {
@@ -187,6 +237,9 @@ class CursorRemoteViewModel(
                 syncGapWarning = false,
             )
         }
+        selectedMachineForReconnect.value = machineId?.takeIf { it.isNotBlank() }
+        coldRestorePending = false
+        persistCurrentSelection()
     }
 
     fun selectWorkspace(workspaceId: String?) {
@@ -201,6 +254,8 @@ class CursorRemoteViewModel(
                 sessions = emptyList(),
             )
         }
+        coldRestorePending = false
+        persistCurrentSelection()
     }
 
     fun selectSession(sessionId: String?) {
@@ -210,6 +265,8 @@ class CursorRemoteViewModel(
         _uiState.update {
             it.withClearedChat().withClearedFileViewer().withClearedModels().withClearedSessionContext().copy(selectedSessionId = sessionId)
         }
+        coldRestorePending = false
+        persistCurrentSelection()
     }
 
     fun sendPrompt(text: String) {
@@ -422,31 +479,56 @@ class CursorRemoteViewModel(
             showWorkspaces(remoteRepository.listWorkspaces())
         }
 
-    suspend fun reconnectSelectedMachine(): Boolean {
-        val state = _uiState.value
-        val machineId = state.selectedMachineId
-        if (machineId.isNullOrEmpty()) {
-            _uiState.update { it.copy(errorMessage = "Machine is not selected") }
-            return false
-        }
-        if (state.remoteConnection != RemoteConnectionState.Failed &&
-            state.remoteConnection != RemoteConnectionState.Disconnected
-        ) {
-            return false
-        }
-        val selectedWorkspaceId = state.selectedWorkspaceId
-        val selectedSessionId = state.selectedSessionId
-        return runAction("Reconnect failed") {
-            val machine = machineDao.getMachine(machineId) ?: error("Machine is not registered")
-            val deviceId = machine.deviceId
-            if (deviceId.isNullOrEmpty() || machine.relayUrl.isEmpty()) {
-                error("Machine is not paired")
+    suspend fun reconnectSelectedMachine(): Boolean =
+        reconnectMutex.withLock {
+            val state = _uiState.value
+            val machineId = state.selectedMachineId
+            if (machineId.isNullOrEmpty()) {
+                _uiState.update { it.copy(errorMessage = "Machine is not selected") }
+                return@withLock false
             }
-            val auth = remoteRepository.reconnect(machine.relayUrl, machine.id, deviceId, selectedSessionId)
-            machineDao.updateConnectionInfo(machine.id, machine.relayUrl, deviceId, nowMillis())
-            applyCatchUpOutcome(auth.catchUp, selectedWorkspaceId, selectedSessionId)
+            if (state.remoteConnection != RemoteConnectionState.Failed &&
+                state.remoteConnection != RemoteConnectionState.Disconnected
+            ) {
+                return@withLock false
+            }
+            val selectedWorkspaceId = state.selectedWorkspaceId
+            val selectedSessionId = state.selectedSessionId
+            val wasCold = coldRestorePending
+            if (wasCold) {
+                suppressChatRestore.set(true)
+            }
+            try {
+                runAction("Reconnect failed") {
+                    val machine = machineDao.getMachine(machineId) ?: error("Machine is not registered")
+                    val deviceId = machine.deviceId
+                    if (deviceId.isNullOrEmpty() || machine.relayUrl.isEmpty()) {
+                        error("Machine is not paired")
+                    }
+                    val auth = remoteRepository.reconnect(machine.relayUrl, machine.id, deviceId, selectedSessionId)
+                    machineDao.updateConnectionInfo(machine.id, machine.relayUrl, deviceId, nowMillis())
+                    applyCatchUpOutcome(auth.catchUp, selectedWorkspaceId, selectedSessionId)
+                    if (wasCold) {
+                        _uiState.update {
+                            it.copy(
+                                chatMessages = emptyList(),
+                                chatStatus = null,
+                                chatTerminal = null,
+                                isSending = false,
+                                isStopping = false,
+                            )
+                        }
+                        if (validateColdRestore()) {
+                            coldRestorePending = false
+                        }
+                    }
+                }
+            } finally {
+                if (wasCold) {
+                    suppressChatRestore.set(false)
+                }
+            }
         }
-    }
 
     suspend fun openWorkspace(workspaceId: String): Boolean =
         runAction("Failed to list sessions") {
@@ -477,7 +559,7 @@ class CursorRemoteViewModel(
 
     override fun onCleared() {
         voicePromptController?.close()
-        remoteRepository.disconnect()
+        reconnectController.close()
         super.onCleared()
     }
 
@@ -672,6 +754,9 @@ class CursorRemoteViewModel(
     }
 
     private fun applyChatEvent(event: RemoteEvent) {
+        if (suppressChatRestore.get()) {
+            return
+        }
         val chat =
             try {
                 RemoteProtocol.parseChatEvent(event)
@@ -1001,7 +1086,13 @@ class CursorRemoteViewModel(
                     risk = it.risk,
                 )
             }
-        val needsResync = catchUp.status == "gap" || gapResyncRequired.get()
+        val durableCatchUp =
+            try {
+                reliabilityStore.needsCatchUp()
+            } catch (_: Exception) {
+                true
+            }
+        val needsResync = catchUp.status == "gap" || gapResyncRequired.get() || durableCatchUp
         if (!needsResync) {
             _uiState.update { state ->
                 state.copy(
@@ -1029,6 +1120,10 @@ class CursorRemoteViewModel(
                     remoteRepository.listSessions(workspaceId)
                 }
             gapResyncRequired.set(false)
+            try {
+                reliabilityStore.setNeedsCatchUp(false)
+            } catch (_: Exception) {
+            }
             _uiState.update { state ->
                 state.copy(
                     isLoading = false,
@@ -1069,6 +1164,396 @@ class CursorRemoteViewModel(
     private fun showWorkspaces(workspaces: List<WorkspaceInfo>) {
         _uiState.update {
             it.copy(isLoading = false, workspaces = workspaces, sessions = emptyList(), errorMessage = null)
+        }
+    }
+
+    private suspend fun resolveNotificationTarget(target: NotificationTarget) {
+        persistCurrentSelection()
+        var claimedVersion = persistVersion.get()
+        val machine =
+            try {
+                machineDao.getMachine(target.machineId)
+            } catch (_: Exception) {
+                null
+            }
+        val deviceId = machine?.deviceId
+        if (machine == null || deviceId.isNullOrEmpty() || machine.relayUrl.isEmpty()) {
+            if (!abortDeepLinkForUser(target, claimedVersion)) {
+                publishRestore(AppDestination.Machines)
+            }
+            return
+        }
+        val current = _uiState.value
+        val alreadySelected =
+            current.remoteConnection == RemoteConnectionState.Ready &&
+                remoteRepository.currentMachineId() == target.machineId &&
+                current.selectedMachineId == target.machineId &&
+                current.selectedWorkspaceId != null &&
+                !target.sessionId.isEmpty() &&
+                current.selectedSessionId == target.sessionId
+        if (alreadySelected) {
+            if (!abortDeepLinkForUser(target, claimedVersion)) {
+                publishRestore(AppDestination.Chat)
+            }
+            return
+        }
+        val reuseConnection =
+            _uiState.value.remoteConnection == RemoteConnectionState.Ready &&
+                remoteRepository.currentMachineId() == target.machineId
+        if (!reuseConnection) {
+            val connected =
+                reconnectMutex.withLock {
+                    suppressChatRestore.set(true)
+                    try {
+                        val auth =
+                            remoteRepository.reconnect(
+                                machine.relayUrl,
+                                machine.id,
+                                deviceId,
+                                target.sessionId.takeIf { it.isNotEmpty() },
+                            )
+                        machineDao.updateConnectionInfo(
+                            machine.id,
+                            machine.relayUrl,
+                            deviceId,
+                            nowMillis(),
+                        )
+                        applyCatchUpOutcome(
+                            auth.catchUp,
+                            _uiState.value.selectedWorkspaceId,
+                            target.sessionId.takeIf { it.isNotEmpty() },
+                        )
+                        true
+                    } catch (error: CancellationException) {
+                        throw error
+                    } catch (_: Exception) {
+                        false
+                    } finally {
+                        suppressChatRestore.set(false)
+                    }
+                }
+            if (!connected) {
+                if (!abortDeepLinkForUser(target, claimedVersion)) {
+                    applyDeepLinkSelection(target.machineId, null, null, clearChat = true)
+                    publishRestore(AppDestination.Workspaces)
+                }
+                return
+            }
+        }
+        if (abortDeepLinkForUser(target, claimedVersion)) {
+            return
+        }
+        if (_uiState.value.selectedMachineId != target.machineId) {
+            applyDeepLinkSelection(target.machineId, null, null, clearChat = true)
+            claimedVersion = persistVersion.get()
+        }
+        if (remoteRepository.currentMachineId() != target.machineId) {
+            if (!abortDeepLinkForUser(target, claimedVersion)) {
+                applyDeepLinkSelection(target.machineId, null, null, clearChat = true)
+                publishRestore(AppDestination.Workspaces)
+            }
+            return
+        }
+        if (target.sessionId.isEmpty()) {
+            applyDeepLinkSelection(target.machineId, null, null, clearChat = true)
+            publishRestore(AppDestination.Workspaces)
+            return
+        }
+        val explored =
+            try {
+                withTimeout(DEEP_LINK_SEARCH_TIMEOUT_MS) {
+                    findDeepLinkSession(target, claimedVersion)
+                }
+            } catch (error: TimeoutCancellationException) {
+                DeepLinkExploreResult(emptyList())
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                DeepLinkExploreResult(emptyList())
+            }
+        if (abortDeepLinkForUser(target, claimedVersion) || explored.aborted) {
+            abortDeepLinkForUser(target, claimedVersion)
+            return
+        }
+        val hitWorkspaceId = explored.hitWorkspaceId
+        if (hitWorkspaceId == null) {
+            applyDeepLinkSelection(
+                target.machineId,
+                null,
+                null,
+                workspaces = explored.workspaces,
+                clearChat = true,
+            )
+            publishRestore(AppDestination.Workspaces)
+            return
+        }
+        val loaded =
+            try {
+                remoteRepository.loadSession(target.sessionId)
+            } catch (error: CancellationException) {
+                throw error
+            } catch (_: Exception) {
+                if (!abortDeepLinkForUser(target, claimedVersion)) {
+                    applyDeepLinkSelection(
+                        target.machineId,
+                        null,
+                        null,
+                        workspaces = explored.workspaces,
+                        clearChat = true,
+                    )
+                    publishRestore(AppDestination.Workspaces)
+                }
+                return
+            }
+        if (abortDeepLinkForUser(target, claimedVersion)) {
+            return
+        }
+        if (loaded.remoteSessionId != target.sessionId) {
+            applyDeepLinkSelection(
+                target.machineId,
+                null,
+                null,
+                workspaces = explored.workspaces,
+                clearChat = true,
+            )
+            publishRestore(AppDestination.Workspaces)
+            return
+        }
+        applyDeepLinkSelection(
+            machineId = target.machineId,
+            workspaceId = hitWorkspaceId,
+            sessionId = loaded.remoteSessionId,
+            workspaces = explored.workspaces,
+            sessions = explored.sessions,
+            clearChat = true,
+        )
+        publishRestore(AppDestination.Chat)
+        refreshModels()
+    }
+
+    private fun abortDeepLinkForUser(target: NotificationTarget, claimedVersion: Long): Boolean {
+        if (persistVersion.get() == claimedVersion) {
+            return false
+        }
+        val uiMachine = _uiState.value.selectedMachineId
+        if (remoteRepository.currentMachineId() == target.machineId && uiMachine != target.machineId) {
+            remoteRepository.disconnect()
+        }
+        return true
+    }
+
+    private suspend fun findDeepLinkSession(
+        target: NotificationTarget,
+        claimedVersion: Long,
+    ): DeepLinkExploreResult {
+        val workspaces = remoteRepository.listWorkspaces()
+        if (persistVersion.get() != claimedVersion) {
+            return DeepLinkExploreResult(workspaces, aborted = true)
+        }
+        val preferred = _uiState.value.selectedWorkspaceId
+        val ordered = ArrayList<WorkspaceInfo>(minOf(DEEP_LINK_WORKSPACE_LIMIT, workspaces.size))
+        val head = workspaces.firstOrNull { it.workspaceId == preferred }
+        if (head != null) {
+            ordered.add(head)
+        }
+        for (workspace in workspaces) {
+            if (ordered.size >= DEEP_LINK_WORKSPACE_LIMIT) {
+                break
+            }
+            if (workspace.workspaceId != preferred) {
+                ordered.add(workspace)
+            }
+        }
+        for (workspace in ordered) {
+            if (persistVersion.get() != claimedVersion) {
+                return DeepLinkExploreResult(workspaces, aborted = true)
+            }
+            val sessions = remoteRepository.listSessions(workspace.workspaceId)
+            if (persistVersion.get() != claimedVersion) {
+                return DeepLinkExploreResult(workspaces, aborted = true)
+            }
+            if (sessions.any { it.remoteSessionId == target.sessionId }) {
+                return DeepLinkExploreResult(workspaces, hitWorkspaceId = workspace.workspaceId, sessions = sessions)
+            }
+        }
+        return DeepLinkExploreResult(workspaces)
+    }
+
+    private fun applyDeepLinkSelection(
+        machineId: String,
+        workspaceId: String?,
+        sessionId: String?,
+        workspaces: List<WorkspaceInfo> = _uiState.value.workspaces,
+        sessions: List<SessionInfo> = emptyList(),
+        clearChat: Boolean,
+    ) {
+        if (clearChat) {
+            invalidateChat()
+            invalidateDiff()
+            invalidateFileViewer()
+            invalidateModels()
+            gapResyncRequired.set(false)
+        }
+        _uiState.update { state ->
+            val cleared =
+                if (clearChat) {
+                    state
+                        .withClearedChat()
+                        .withClearedDiff()
+                        .withClearedFileViewer()
+                        .withClearedModels()
+                        .withClearedSessionContext()
+                } else {
+                    state
+                }
+            cleared.copy(
+                selectedMachineId = machineId,
+                selectedWorkspaceId = workspaceId,
+                selectedSessionId = sessionId,
+                workspaces = workspaces,
+                sessions = if (workspaceId == null) emptyList() else sessions,
+                syncGapWarning = if (clearChat) false else cleared.syncGapWarning,
+                errorMessage = null,
+                isLoading = false,
+            )
+        }
+        selectedMachineForReconnect.value = machineId
+        coldRestorePending = false
+        persistCurrentSelection()
+    }
+
+    private suspend fun restoreNavigationSelection() {
+        val restoreAt = persistVersion.get()
+        val loaded =
+            try {
+                reliabilityStore.loadSelection()
+            } catch (_: Exception) {
+                NavigationSelection(null, null, null)
+            }
+        val machineId = loaded.machineId?.takeIf { it.isNotBlank() }
+        val workspaceId = loaded.workspaceId?.takeIf { it.isNotBlank() }
+        val sessionId = loaded.sessionId?.takeIf { it.isNotBlank() }
+        val registered =
+            machineId != null &&
+                try {
+                    machineDao.getMachine(machineId) != null
+                } catch (_: Exception) {
+                    false
+                }
+        val sanitized =
+            if (!registered) {
+                NavigationSelection(null, null, null)
+            } else if (workspaceId == null) {
+                NavigationSelection(machineId, null, null)
+            } else {
+                NavigationSelection(machineId, workspaceId, sessionId)
+            }
+        persistMutex.withLock {
+            if (persistVersion.get() != restoreAt) {
+                return@withLock
+            }
+            _uiState.update {
+                it.copy(
+                    selectedMachineId = sanitized.machineId,
+                    selectedWorkspaceId = sanitized.workspaceId,
+                    selectedSessionId = sanitized.sessionId,
+                )
+            }
+            if (sanitized.machineId != null) {
+                coldRestorePending = true
+                publishRestore(destinationOf(sanitized))
+            }
+            selectedMachineForReconnect.value = sanitized.machineId
+            try {
+                reliabilityStore.saveSelection(sanitized)
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun persistCurrentSelection() {
+        persistSelection(
+            NavigationSelection(
+                _uiState.value.selectedMachineId?.takeIf { it.isNotBlank() },
+                _uiState.value.selectedWorkspaceId?.takeIf { it.isNotBlank() },
+                _uiState.value.selectedSessionId?.takeIf { it.isNotBlank() },
+            ),
+        )
+    }
+
+    private fun persistSelection(selection: NavigationSelection) {
+        val version = persistVersion.incrementAndGet()
+        scope.launch {
+            try {
+                persistMutex.withLock {
+                    if (version != persistVersion.get()) {
+                        return@withLock
+                    }
+                    reliabilityStore.saveSelection(selection)
+                }
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun publishRestore(destination: AppDestination) {
+        _navigationRestore.value = NavigationRestoreTarget(restoreRevision.incrementAndGet(), destination)
+    }
+
+    private fun destinationOf(selection: NavigationSelection): AppDestination =
+        when {
+            selection.machineId == null -> AppDestination.Machines
+            selection.workspaceId == null -> AppDestination.Workspaces
+            selection.sessionId == null -> AppDestination.Sessions
+            else -> AppDestination.Chat
+        }
+
+    private suspend fun validateColdRestore(): Boolean {
+        var confirmed = AppDestination.Workspaces
+        val workspaceId = _uiState.value.selectedWorkspaceId
+        val sessionId = _uiState.value.selectedSessionId
+        return try {
+            val workspaces = remoteRepository.listWorkspaces()
+            _uiState.update { it.copy(workspaces = workspaces, isLoading = false) }
+            if (workspaceId.isNullOrEmpty() || workspaces.none { it.workspaceId == workspaceId }) {
+                _uiState.update {
+                    it.copy(selectedWorkspaceId = null, selectedSessionId = null, sessions = emptyList())
+                }
+                persistCurrentSelection()
+                publishRestore(AppDestination.Workspaces)
+                true
+            } else {
+                confirmed = AppDestination.Sessions
+                val sessions = remoteRepository.listSessions(workspaceId)
+                _uiState.update { it.copy(sessions = sessions) }
+                if (sessionId.isNullOrEmpty() || sessions.none { it.remoteSessionId == sessionId }) {
+                    _uiState.update { it.copy(selectedSessionId = null) }
+                    persistCurrentSelection()
+                    publishRestore(AppDestination.Sessions)
+                    true
+                } else {
+                    remoteRepository.loadSession(sessionId)
+                    _uiState.update {
+                        it.copy(
+                            chatMessages = emptyList(),
+                            chatStatus = null,
+                            chatError = null,
+                            chatTerminal = null,
+                            isSending = false,
+                            isStopping = false,
+                        )
+                    }
+                    persistCurrentSelection()
+                    publishRestore(AppDestination.Chat)
+                    true
+                }
+            }
+        } catch (error: CancellationException) {
+            throw error
+        } catch (_: Exception) {
+            persistCurrentSelection()
+            publishRestore(confirmed)
+            false
         }
     }
 
@@ -1129,3 +1614,13 @@ private fun CursorRemoteUiState.withClearedSessionContext(): CursorRemoteUiState
         sessionContextBreakdown = null,
         sessionUsage = null,
     )
+
+private data class DeepLinkExploreResult(
+    val workspaces: List<WorkspaceInfo>,
+    val hitWorkspaceId: String? = null,
+    val sessions: List<SessionInfo> = emptyList(),
+    val aborted: Boolean = false,
+)
+
+private const val DEEP_LINK_SEARCH_TIMEOUT_MS = 30_000L
+private const val DEEP_LINK_WORKSPACE_LIMIT = 32

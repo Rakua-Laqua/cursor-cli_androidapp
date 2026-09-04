@@ -25,6 +25,16 @@ function pidExists(pid) {
   }
 }
 
+async function waitUntil(predicate, timeoutMs = 2000) {
+  const started = Date.now();
+  while (!predicate()) {
+    if (Date.now() - started > timeoutMs) {
+      throw new Error('timed out waiting for condition');
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 async function withDaemon(options, fn) {
   const { logger, ...acp } = options;
   const daemon = await Daemon.start({
@@ -103,21 +113,29 @@ test('incoming request handler result is sent back to ACP', async () => {
   );
 });
 
-test('ACP crash rejects pending requests and does not take down the daemon', async () => {
+test('ACP crash rejects pending requests then respawns the same process manager', async () => {
   const daemon = await Daemon.start({
     acp: {
       ...mockLaunch(),
       shutdownTimeoutMs: 1000,
     },
   });
+  const notifications = [];
   const exits = [];
+  daemon.acp.onNotification((notification) => notifications.push(notification));
   daemon.acp.onExit((info) => exits.push(info));
+  const oldPid = daemon.acp.pid;
   const pending = daemon.acp.request('hang');
   await daemon.acp.request('crash').catch(() => {});
   await assert.rejects(pending, AcpProcessExitedError);
-  assert.equal(daemon.acp.getState(), 'exited');
   assert.equal(exits[0]?.expected, false);
   assert.equal(exits[0]?.code, 2);
+  await waitUntil(() => daemon.acp.getState() === 'running' && daemon.acp.pid !== oldPid);
+  const echoed = await daemon.acp.request('echo', { after: 'respawn' });
+  assert.deepEqual(echoed, { params: { after: 'respawn' } });
+  await daemon.acp.request('notify-me');
+  assert.equal(notifications.at(-1)?.method, 'session/update');
+  await assert.rejects(() => daemon.acp.respawn(), /running/);
   await daemon.stop();
 });
 
@@ -141,14 +159,16 @@ test('invalid stdout lines are ignored and later responses still work', async ()
   });
 });
 
-test('stderr lines are forwarded to the logger', async () => {
-  const stderr = [];
+test('stderr is recorded as bounded suppression without raw content', async () => {
+  const logs = [];
   await withDaemon(
     {
       logger: {
-        info() {},
+        info(message) {
+          logs.push(message);
+        },
         error(message) {
-          stderr.push(message);
+          logs.push(message);
         },
       },
     },
@@ -156,7 +176,11 @@ test('stderr lines are forwarded to the logger', async () => {
       await daemon.acp.request('stderr-line');
     },
   );
-  assert.ok(stderr.includes('stderr-line'));
+  assert.equal(
+    logs.some((message) => message.includes('stderr-line') || message.includes('mock-acp-started')),
+    false,
+  );
+  assert.ok(logs.some((message) => message === 'ACP stderr suppressed'));
 });
 
 test('timed out requests are cleaned up from the pending map', async () => {
@@ -194,6 +218,48 @@ test('per-request timeout override can shorten a single request', async () => {
     const echoed = await daemon.acp.request('echo', { after: 'override' });
     assert.deepEqual(echoed, { params: { after: 'override' } });
   });
+});
+
+test('expected shutdown does not respawn and stop during recovery leaves no child', async () => {
+  const errors = [];
+  const onUnhandled = (error) => {
+    errors.push(error);
+  };
+  process.on('unhandledRejection', onUnhandled);
+  process.on('uncaughtException', onUnhandled);
+  try {
+    const first = await Daemon.start({
+      acp: {
+        ...mockLaunch(),
+        shutdownTimeoutMs: 1000,
+      },
+    });
+    const firstPid = first.acp.pid;
+    await first.stop();
+    assert.equal(first.acp.getState(), 'exited');
+    assert.equal(pidExists(firstPid), false);
+    await assert.rejects(() => first.acp.respawn(), /shutting down|expected/);
+
+    const daemon = await Daemon.start({
+      acp: {
+        ...mockLaunch(),
+        shutdownTimeoutMs: 1000,
+      },
+    });
+    const oldPid = daemon.acp.pid;
+    await daemon.acp.request('crash').catch(() => {});
+    await daemon.stop();
+    assert.equal(daemon.acp.getState(), 'exited');
+    assert.equal(pidExists(oldPid), false);
+    if (typeof daemon.acp.pid === 'number') {
+      assert.equal(pidExists(daemon.acp.pid), false);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    assert.equal(errors.length, 0);
+  } finally {
+    process.off('unhandledRejection', onUnhandled);
+    process.off('uncaughtException', onUnhandled);
+  }
 });
 
 test('daemon stop leaves no ACP child process', async () => {

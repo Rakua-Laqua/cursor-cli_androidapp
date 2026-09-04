@@ -629,6 +629,59 @@ class RemoteProtocolTest {
         }
     }
 
+    @Test
+    fun transportRegisterFrameAndResultAreStrict() {
+        assertEquals(
+            """{"kind":"transport_register","requestId":"reg-1","fcmToken":"d1.tok-APA91b:x","appForeground":false}""",
+            RemoteProtocol.encodeTransportRegisterFrame("reg-1", "d1.tok-APA91b:x", false),
+        )
+        assertEquals(
+            """{"kind":"transport_register","requestId":"reg-1","fcmToken":null,"appForeground":true}""",
+            RemoteProtocol.encodeTransportRegisterFrame("reg-1", null, true),
+        )
+        val max =
+            RemoteProtocol.encodeTransportRegisterFrame("r".repeat(128), "A.za9_-:".padEnd(4096, 'a'), false)
+        assertTrue(max.toByteArray(StandardCharsets.UTF_8).size <= 8192)
+        assertEncodeError("non-empty") { RemoteProtocol.encodeTransportRegisterFrame("", "tok", true) }
+        assertEncodeError("128") { RemoteProtocol.encodeTransportRegisterFrame("r".repeat(129), "tok", true) }
+        assertEncodeError("non-empty string or null") { RemoteProtocol.encodeTransportRegisterFrame("reg-1", "", true) }
+        assertEncodeError("4096") { RemoteProtocol.encodeTransportRegisterFrame("reg-1", "a".repeat(4097), true) }
+        assertEncodeError("invalid characters") { RemoteProtocol.encodeTransportRegisterFrame("reg-1", "tok/slash", true) }
+        RemoteProtocol.parseTransportRegistrationResult(
+            kotlinx.serialization.json.Json.parseToJsonElement("""{"registered":true}"""),
+        )
+        assertResultError("registered") { kotlinx.serialization.json.Json.parseToJsonElement("""{"registered":false}""") }
+        assertResultError("unexpected") {
+            kotlinx.serialization.json.Json.parseToJsonElement("""{"registered":true,"extra":1}""")
+        }
+        assertResultError("JSON object") { kotlinx.serialization.json.Json.parseToJsonElement("true") }
+        assertResultError("JSON object") { null }
+    }
+
+    private fun assertEncodeError(
+        messagePattern: String,
+        block: () -> Unit,
+    ) {
+        try {
+            block()
+            fail("expected ProtocolParseError")
+        } catch (error: ProtocolParseError) {
+            assertTrue("message=${error.message}", Regex(messagePattern).containsMatchIn(error.message ?: ""))
+        }
+    }
+
+    private fun assertResultError(
+        messagePattern: String,
+        value: () -> kotlinx.serialization.json.JsonElement?,
+    ) {
+        try {
+            RemoteProtocol.parseTransportRegistrationResult(value())
+            fail("expected ProtocolParseError")
+        } catch (error: ProtocolParseError) {
+            assertTrue("message=${error.message}", Regex(messagePattern).containsMatchIn(error.message ?: ""))
+        }
+    }
+
     private fun chatRemoteEvent(
         type: String,
         payload: String,

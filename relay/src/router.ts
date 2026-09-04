@@ -10,7 +10,15 @@ import {
   type PairFrame,
   type PairingVerifyFrame,
   type TransportFrame,
+  type TransportRegisterFrame,
 } from '@cursor-remote/protocol';
+
+import {
+  createFcmSenderFromEnv,
+  PushDispatcher,
+  type FcmSender,
+  type SchedulePush,
+} from './fcm.js';
 
 const RELAY_ERROR = {
   offline: 'Machine is offline',
@@ -22,6 +30,12 @@ const RELAY_ERROR = {
   authInProgress: 'Authentication already in progress',
 } as const;
 
+export interface RelayRouterOptions {
+  readonly fcmSender?: FcmSender | undefined;
+  readonly waitingDelayMs?: number | undefined;
+  readonly schedule?: SchedulePush | undefined;
+}
+
 interface Connection {
   readonly role: 'machine' | 'client';
   readonly machineId: string;
@@ -30,6 +44,7 @@ interface Connection {
   authenticated: boolean;
   nonce: string | undefined;
   inflightVerificationId: string | undefined;
+  deviceId: string | undefined;
 }
 
 interface PendingRequest {
@@ -50,6 +65,15 @@ export class RelayRouter {
   private readonly clients = new Map<string, Set<Connection>>();
   private readonly pending = new Map<string, PendingRequest>();
   private readonly verifications = new Map<string, PendingVerification>();
+  private readonly push: PushDispatcher;
+
+  constructor(options: RelayRouterOptions = {}) {
+    this.push = new PushDispatcher({
+      sender: options.fcmSender ?? createFcmSenderFromEnv(),
+      waitingDelayMs: options.waitingDelayMs,
+      schedule: options.schedule,
+    });
+  }
 
   attachMachine(machineId: string, socket: WebSocket): void {
     this.supersedeMachine(machineId);
@@ -61,6 +85,7 @@ export class RelayRouter {
       authenticated: true,
       nonce: undefined,
       inflightVerificationId: undefined,
+      deviceId: undefined,
     };
     this.bind(connection);
     this.machines.set(machineId, connection);
@@ -76,6 +101,7 @@ export class RelayRouter {
       authenticated: false,
       nonce,
       inflightVerificationId: undefined,
+      deviceId: undefined,
     };
     this.bind(connection);
     let group = this.clients.get(machineId);
@@ -101,6 +127,7 @@ export class RelayRouter {
   }
 
   dispose(reason: string): void {
+    this.push.dispose();
     this.failMatchingPending(() => true, reason);
     this.failMatchingVerifications(() => true, reason);
     for (const connection of [...this.connections.values()]) {
@@ -165,6 +192,10 @@ export class RelayRouter {
   private onClientFrame(connection: Connection, frame: TransportFrame): void {
     if (frame.kind === 'pair' || frame.kind === 'auth_proof') {
       this.onClientAuth(connection, frame);
+      return;
+    }
+    if (frame.kind === 'transport_register') {
+      this.onTransportRegister(connection, frame);
       return;
     }
     if (frame.kind !== 'command') {
@@ -265,6 +296,35 @@ export class RelayRouter {
     sendFrame(machine.socket, verifyFrame);
   }
 
+  private onTransportRegister(connection: Connection, frame: TransportRegisterFrame): void {
+    const requestId = frame.requestId;
+    if (!connection.authenticated || connection.deviceId === undefined) {
+      sendFrame(connection.socket, {
+        kind: 'result',
+        result: remoteCommandFailure(requestId, RELAY_ERROR.unpaired),
+      });
+      return;
+    }
+    if (this.requestIdInUse(requestId)) {
+      sendFrame(connection.socket, {
+        kind: 'result',
+        result: remoteCommandFailure(requestId, RELAY_ERROR.duplicate),
+      });
+      return;
+    }
+    this.push.register({
+      machineId: connection.machineId,
+      deviceId: connection.deviceId,
+      fcmToken: frame.fcmToken,
+      appForeground: frame.appForeground,
+      connection,
+    });
+    sendFrame(connection.socket, {
+      kind: 'result',
+      result: remoteCommandSuccess(requestId, { registered: true }),
+    });
+  }
+
   private onMachineFrame(connection: Connection, frame: TransportFrame): void {
     if (this.machines.get(connection.machineId) !== connection) {
       return;
@@ -275,6 +335,7 @@ export class RelayRouter {
     }
     if (frame.kind === 'event') {
       this.broadcast(connection.machineId, frame);
+      this.push.onEvent(connection.machineId, frame.event);
       return;
     }
     if (frame.kind !== 'result') {
@@ -307,6 +368,7 @@ export class RelayRouter {
     if (frame.ok) {
       pending.client.authenticated = true;
       pending.client.nonce = undefined;
+      pending.client.deviceId = frame.deviceId ?? undefined;
     } else {
       this.issueChallenge(pending.client);
     }
@@ -340,6 +402,7 @@ export class RelayRouter {
       return;
     }
 
+    this.push.detach(connection);
     this.clients.get(connection.machineId)?.delete(connection);
     for (const [requestId, pending] of this.pending) {
       if (pending.client === connection) {
@@ -380,7 +443,9 @@ export class RelayRouter {
   }
 
   private issueChallenge(client: Connection): void {
+    this.push.detach(client);
     client.authenticated = false;
+    client.deviceId = undefined;
     client.inflightVerificationId = undefined;
     client.nonce = randomBase64Url32();
     sendFrame(client.socket, { kind: 'auth_challenge', nonce: client.nonce });
